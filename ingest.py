@@ -1,9 +1,12 @@
-import fitz  # PyMuPDF
-import sqlite3
 import os
+import sqlite3
 import uuid
 import numpy as np
 from sentence_transformers import SentenceTransformer
+from docling.document_converter import DocumentConverter, PdfFormatOption
+from docling.datamodel.base_models import InputFormat
+from docling.datamodel.pipeline_options import PdfPipelineOptions
+from docling.chunking import HierarchicalChunker
 
 # --- Configuration ---
 PDF_PATH = "WhiteBook.pdf"
@@ -11,25 +14,23 @@ DB_PATH = "staffbook_kb.sqlite"
 IMAGE_DIR = "images"
 MODEL_NAME = "Alibaba-NLP/gte-modernbert-base"
 
-# Target ~400 tokens (approx 300 words), 50 token overlap (approx 35 words)
-CHUNK_SIZE_WORDS = 300
-OVERLAP_WORDS = 35
-
 def setup_database():
-    """Initializes the SQLite database and creates the chunks table."""
+    """Initializes the SQLite database with the advanced schema."""
     if os.path.exists(DB_PATH):
-        os.remove(DB_PATH) # Start fresh each run
+        os.remove(DB_PATH)
         print(f"Removed old database: {DB_PATH}")
         
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
+    # Note the change: image_filename instead of has_image for precise mapping
     cursor.execute("""
         CREATE TABLE chunks (
             id TEXT PRIMARY KEY,
+            heading_context TEXT,
             text_content TEXT,
             page_start INTEGER,
             page_end INTEGER,
-            has_image BOOLEAN,
+            image_filename TEXT,
             embedding BLOB
         )
     """)
@@ -37,110 +38,100 @@ def setup_database():
     return conn
 
 def setup_directories():
-    """Creates the image output directory if it doesn't exist."""
     if not os.path.exists(IMAGE_DIR):
         os.makedirs(IMAGE_DIR)
-        print(f"Created directory: {IMAGE_DIR}")
-
-def chunk_text(text, page_num):
-    """Splits text into overlapping word-based chunks."""
-    words = text.split()
-    chunks = []
-    
-    if not words:
-        return chunks
-
-    for i in range(0, len(words), CHUNK_SIZE_WORDS - OVERLAP_WORDS):
-        chunk_words = words[i:i + CHUNK_SIZE_WORDS]
-        chunk_text = " ".join(chunk_words)
-        if len(chunk_text.strip()) > 0:
-            chunks.append({
-                "id": str(uuid.uuid4()),
-                "text": chunk_text,
-                "page": page_num
-            })
-        
-        # Stop if we've reached the end of the text
-        if i + CHUNK_SIZE_WORDS >= len(words):
-            break
-            
-    return chunks
 
 def main():
-    print(f"Starting ingestion pipeline for {PDF_PATH}...")
-    
-    if not os.path.exists(PDF_PATH):
-        raise FileNotFoundError(f"Could not find {PDF_PATH} in the current directory.")
-
+    print(f"Starting advanced ingestion pipeline for {PDF_PATH}...")
     setup_directories()
     conn = setup_database()
     cursor = conn.cursor()
-    
-    # 1. Load the embedding model
-    print(f"Loading embedding model: {MODEL_NAME}...")
-    # trust_remote_code=True is required for Nomic models
-    model = SentenceTransformer(MODEL_NAME, trust_remote_code=True)
-    
-    # 2. Process the PDF
-    print("Extracting text, images, and generating chunks...")
-    doc = fitz.open(PDF_PATH)
-    all_chunks = []
-    
-    for page_index in range(len(doc)):
-        page_num = page_index + 1 # 1-indexed for human readability
-        page = doc[page_index]
-        
-        # Extract Image (Render page at 150 DPI)
-        pix = page.get_pixmap(dpi=150)
-        image_path = os.path.join(IMAGE_DIR, f"page_{page_num}.png")
-        pix.save(image_path)
-        
-        # Extract Text
-        text = page.get_text("text")
-        
-        # Chunk Text
-        page_chunks = chunk_text(text, page_num)
-        all_chunks.extend(page_chunks)
-        
-        if page_num % 10 == 0 or page_num == len(doc):
-            print(f"Processed page {page_num}/{len(doc)}")
 
-    # 3. Generate Embeddings and Insert to DB
-    print(f"Generating embeddings for {len(all_chunks)} chunks...")
+    # 1. Load Embedding Model
+    print(f"Loading embedding model: {MODEL_NAME}...")
+    model = SentenceTransformer(MODEL_NAME, trust_remote_code=True)
+
+    # 2. Configure Docling for precise image and table extraction
+    print("Configuring Docling structural parser...")
+    pipeline_options = PdfPipelineOptions()
+    pipeline_options.generate_picture_images = True
+    pipeline_options.generate_table_images = True
     
-    for i, chunk in enumerate(all_chunks):
-        # Nomic performs best with the 'search_document: ' prefix for the corpus
-        embedding_input = "search_document: " + chunk["text"]
+    converter = DocumentConverter(
+        format_options={
+            InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)
+        }
+    )
+
+    # 3. Parse the PDF Document
+    print("Parsing document structure (this may take a moment)...")
+    conv_result = converter.convert(PDF_PATH)
+    doc = conv_result.document
+
+    # 4. Perform Hierarchical Chunking
+    # This automatically groups text under its relevant headers based on the TOC/Formatting
+    print("Applying hierarchical chunking...")
+    chunker = HierarchicalChunker()
+    chunks = list(chunker.chunk(doc))
+
+    print(f"Generated {len(chunks)} structurally-aware chunks. Generating embeddings...")
+
+    for i, chunk in enumerate(chunks):
+        chunk_id = str(uuid.uuid4())
         
-        # Generate embedding
+        # --- Metadata Extraction ---
+        # Extract the hierarchical path (e.g., "Cardiology > ACLS > Bradycardia")
+        headings = [h.text for h in chunk.meta.headings if h.text]
+        heading_context = " > ".join(headings) if headings else "General Reference"
+        
+        text_content = chunk.text
+        if not text_content.strip():
+            continue
+
+        # --- Image/Table Extraction ---
+        # Look for image or table items specifically within this chunk's bounding boxes
+        image_filename = None
+        for item in chunk.meta.doc_items:
+            if hasattr(item, "image") and item.image is not None:
+                image_filename = f"item_{chunk_id}.png"
+                image_path = os.path.join(IMAGE_DIR, image_filename)
+                # Save the specific figure/table, not the whole page
+                item.image.pil_image.save(image_path, format="PNG")
+                break # Bind the first major visual item found in this chunk
+
+        # Pages can span multiple items in a chunk
+        page_start = chunk.meta.doc_items[0].prov[0].page_no if chunk.meta.doc_items else 0
+        page_end = chunk.meta.doc_items[-1].prov[0].page_no if chunk.meta.doc_items else 0
+
+        # --- Contextual Embedding Formulation ---
+        # We prepend the heading context so the model links the text to the specific medical topic
+        embedding_input = f"search_document: [{heading_context}] {text_content}"
         embedding = model.encode(embedding_input)
-        
-        # Convert to float32 bytes for SQLite BLOB storage
         embedding_blob = embedding.astype(np.float32).tobytes()
-        
-        # Insert into database
+
+        # --- Database Insertion ---
         cursor.execute("""
-            INSERT INTO chunks (id, text_content, page_start, page_end, has_image, embedding)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO chunks (id, heading_context, text_content, page_start, page_end, image_filename, embedding)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
         """, (
-            chunk["id"], 
-            chunk["text"], 
-            chunk["page"], 
-            chunk["page"], 
-            True, # True because we rendered an image for every page
+            chunk_id,
+            heading_context,
+            text_content,
+            page_start,
+            page_end,
+            image_filename,
             embedding_blob
         ))
-        
+
         if (i + 1) % 50 == 0:
-            print(f"Embedded and saved {i + 1}/{len(all_chunks)} chunks...")
-            
+            print(f"Processed {i + 1}/{len(chunks)} chunks...")
+
     conn.commit()
     conn.close()
-    doc.close()
     
     print("\n--- Pipeline Complete ---")
     print(f"Database saved to: {DB_PATH}")
-    print(f"Images saved to: ./{IMAGE_DIR}/")
+    print(f"Specific figures/tables saved to: ./{IMAGE_DIR}/")
 
 if __name__ == "__main__":
     main()
