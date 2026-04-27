@@ -20,6 +20,7 @@ CHUNK_SIZE_WORDS = 150
 OVERLAP_WORDS = 40
 
 def setup_database():
+    """Initializes a fresh SQLite database for the iOS app."""
     if os.path.exists(DB_PATH):
         os.remove(DB_PATH)
     conn = sqlite3.connect(DB_PATH)
@@ -59,8 +60,6 @@ def scrub_noise(text: str) -> str:
     text = re.sub(r"", "", text)
     
     # 3. Annihilate footers (Author Names and Page Numbers)
-    # This regex looks for 1-3 words (capitalized names) followed optionally by a number at the end of a block
-    # e.g., "Eli Patt\n4" or "Roger Zhou\n\n5"
     text = re.sub(r"([A-Z][a-z]+\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\s*\n*\s*\d{1,3}\s*$", "", text, flags=re.MULTILINE)
     
     # 4. Remove standalone page numbers sitting on their own line
@@ -69,6 +68,21 @@ def scrub_noise(text: str) -> str:
     # Clean up excessive newlines
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
+
+def extract_page_anchor(clean_md: str) -> str:
+    """
+    Extracts the top 3 meaningful lines of the page to create a robust, 
+    highly-specific context anchor for all chunks on this page.
+    """
+    # Grab lines that have actual content, strip out Markdown hashes
+    lines = [line.replace('#', '').strip() for line in clean_md.split('\n') if len(line.strip()) > 3]
+    
+    if not lines:
+        return "General Medical Reference"
+        
+    # Join the top 3 lines to guarantee we capture overarching categories and sub-topics
+    anchor_parts = lines[:3] 
+    return " > ".join(anchor_parts)
 
 def chunk_markdown(clean_md: str, page_num: int, page_anchor: str):
     """
@@ -133,22 +147,14 @@ def main():
         if not clean_md:
             continue
 
-        # 3. Establish the Page Anchor
-        # Look at the first line of the markdown to grab the overarching category (e.g., "# Cardiology")
-        first_line = clean_md.split('\n')[0].replace('#', '').strip()
-        page_anchor = first_line if first_line else "General Medical Reference"
+        # 3. Establish the robust Page Anchor
+        page_anchor = extract_page_anchor(clean_md)
 
         # 4. Dense Chunking
         page_chunks = chunk_markdown(clean_md, page_no, page_anchor)
         
-        # 5. Extract Images (Full page renders for complex algorithms)
-        # For infographics, saving the whole page is often safer than relying on Docling bounding boxes
+        # 5. Assign Image Flag
         image_filename = f"page_{page_no}.png"
-        image_path = os.path.join(IMAGE_DIR, image_filename)
-        
-        # We need to pull the actual page image from the fitz/docling backend if available, 
-        # or rely on the visual indexer you already built in staffbook.
-        # For now, we will just assign the flag so the UI knows an image exists for this page.
         
         for chunk in page_chunks:
             chunk['image'] = image_filename
@@ -156,7 +162,7 @@ def main():
 
     print(f"Generated {len(all_chunks)} highly-dense chunks. Embedding...")
 
-    for i, chunk in enumerate(tqdm(all_chunks, desc="Embedding Chunks")):
+    for chunk in tqdm(all_chunks, desc="Embedding Chunks"):
         # The Anchor is prepended to ensure the vector space groups by medical category
         embedding_input = f"[{chunk['anchor']}] {chunk['text']}"
         embedding = model.encode(embedding_input)
