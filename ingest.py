@@ -77,15 +77,47 @@ def encode_image_to_base64(image_path: str) -> str:
 def build_batch_request(page_no: int, base64_image: str) -> dict:
     # --- UPGRADED MULTIMODAL PROMPT ---
     prompt = """
-    You are an expert medical data extractor. Analyze this page from a medical manual.
-    
-    1. Identify the overarching topic of the page (e.g., "Cardiology > ACLS Tachycardia").
-    2. Extract ALL clinical data, including tables, flowcharts, lists, AND purely visual diagrams (e.g., anatomical patch placements, device interfaces, EKG strips).
-    3. Convert every row of a table, branch of a flowchart, or visual diagram into a HIGHLY DENSE, SELF-CONTAINED paragraph.
-    4. If there is a visual illustration (like defibrillator pad placement or a device monitor), write a highly descriptive paragraph explaining exactly what it shows spatially and functionally so a reader who cannot see the image understands it perfectly.
-    
-    CRITICAL RULE: Never use pronouns or generic terms. Always restate the disease, drug name, or procedure in every paragraph. 
-    Ignore page numbers, author names, and UI buttons like 'Suggest an Edit'.
+    You are an expert clinical informatician and medical data extractor. Your objective is to analyze pages from a highly condensed clinical manual and convert the visual and textual data into dense, self-contained, and perfectly accurate textual chunks optimized for a Retrieval-Augmented Generation (RAG) vector database.
+
+    Your output must contain zero hallucinations. Do not infer or add clinical knowledge outside of what is explicitly presented in the image. Ignore page numbers, author names, and UI elements (e.g., "Suggest an Edit", user avatars).
+
+    Execute the extraction using the following strict protocols:
+
+    1. HIERARCHY & CONTEXT ESTABLISHMENT
+    Begin every distinct block of information by explicitly stating the overarching hierarchy (e.g., "Topic: Cardiology > ACLS > Tachycardia with Pulse").
+
+    2. MODALITY-SPECIFIC EXTRACTION RULES
+    Translate different types of visual information into text using these exact frameworks:
+
+    A. Flowcharts & Clinical Algorithms:
+    Do not summarize the algorithm. Serialize the algorithm by tracing every possible pathway from start to finish using explicit IF/THEN/AND conditional logic.
+    Example format: "In the Bradycardia Diagnostic Algorithm, IF P waves are present AND the P-P interval is regular AND the P-R interval is regular, THEN the differential diagnosis includes 1. Sinus bradycardia, 2. Mobitz I, 3. Mobitz II."
+
+    B. Tables:
+    Never use row/column coordinates. Convert every single cell into a standalone, highly descriptive paragraph that explicitly includes the column header and row identifier.
+    Example format: "For the diagnosis of Acute STEMI, the characteristic ECG findings are ST segment elevation in 2 or more contiguous leads in a coronary distribution, alongside reciprocal ST segment depression."
+
+    C. EKG Tracings & Waveforms:
+    Do not simply state the name of the rhythm. Describe the visual waveform exactly as depicted, translating the visual data into standard electrophysiological terminology (e.g., amplitude, duration, morphology).
+    Example format: "The visual EKG tracing for Wellens Type A demonstrates a biphasic T wave with an initial positive deflection followed by a terminal negative deflection in the precordial leads."
+
+    D. Anatomical & Device Diagrams:
+    Provide a rigorous spatial and functional description. Map the relationships explicitly so a visually impaired reader would understand the exact placement and utility.
+    Example format: "The visual diagram of the Zoll R Series defibrillator displays the physical interface. The Selector Switch is located on the right side of the device, above the Output and Rate dials. The Shock Button is a distinct button located at the top right."
+    Example format: "The anatomical diagram for defibrillator pad placement illustrates the anteroapical position. One pad is placed on the upper right chest below the clavicle, and the second pad is placed on the lower left chest, lateral to the left breast."
+
+    3. THE ZERO-PRONOUN ENTITY RESOLUTION RULE (CRITICAL)
+    Never use pronouns (it, they, this, these) or generic referents (the drug, the condition, the procedure).
+    Incorrect: "If it is unstable, treat with 150mg of the drug."
+    Correct: "If the patient presenting with Tachycardia with Pulse is unstable, treat the Tachycardia with Pulse with 150mg of Amiodarone."
+    Repeat the specific disease state, drug name, anatomical site, or procedure name in every single sentence so standalone vector chunks retain absolute semantic meaning.
+
+    4. DOSING & THRESHOLD ACCURACY
+    Transcribe all numeric values, units, arrows, and mathematical operators (>, <, >=, <=) with absolute precision. If a condition is based on a metric (e.g., HR > 120 bpm, EF < 40%), write out the condition fully in every relevant paragraph.
+
+    Format the extraction as a continuous series of separated paragraphs categorized under clear markdown headings denoting the specific subsection of the page.
+
+    Return only valid content that can be represented in this response schema.
     """
 
     response_format = {
