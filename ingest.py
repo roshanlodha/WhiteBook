@@ -1,26 +1,53 @@
 import os
 import sqlite3
 import uuid
-import re
+import base64
+import json
 import numpy as np
 from tqdm import tqdm
+from pathlib import Path
+from pdf2image import convert_from_path
 from sentence_transformers import SentenceTransformer
-from docling.document_converter import DocumentConverter, PdfFormatOption
-from docling.datamodel.base_models import InputFormat
-from docling.datamodel.pipeline_options import PdfPipelineOptions
+from openai import OpenAI
+from dotenv import load_dotenv
 
-# --- Configuration ---
-PDF_PATH = "WhiteBook.pdf"
-DB_PATH = "staffbook_kb.sqlite"
-IMAGE_DIR = "ios_images"
-MODEL_NAME = "Alibaba-NLP/gte-modernbert-base"
+# --- Configuration Setup ---
+load_dotenv()
 
-# Smaller chunks for highly specific medical dosing
-CHUNK_SIZE_WORDS = 150
-OVERLAP_WORDS = 40
+API_KEY = os.getenv("OPENAI_API_KEY")
+OPENAI_MODEL = os.getenv("OPENAI_MODEL_NAME")
+EMBED_MODEL = os.getenv("EMBEDDING_MODEL_NAME")
+PDF_PATH = os.getenv("PDF_PATH")
+DB_PATH = os.getenv("DB_PATH")
+IMAGE_DIR = os.getenv("IMAGE_DIR")
 
+BATCH_FILE = "batch_requests.jsonl"
+STATE_FILE = "batch_state.json"
+
+if not all([API_KEY, OPENAI_MODEL, EMBED_MODEL, PDF_PATH, DB_PATH, IMAGE_DIR]):
+    raise ValueError("Missing one or more required environment variables in the .env file.")
+
+client = OpenAI(api_key=API_KEY)
+
+# --- State Management ---
+def load_state():
+    if os.path.exists(STATE_FILE):
+        with open(STATE_FILE, "r") as f:
+            return json.load(f)
+    return None
+
+def save_state(state_data):
+    with open(STATE_FILE, "w") as f:
+        json.dump(state_data, f)
+
+def clear_state():
+    if os.path.exists(STATE_FILE):
+        os.remove(STATE_FILE)
+    if os.path.exists(BATCH_FILE):
+        os.remove(BATCH_FILE)
+
+# --- Database & Encoding ---
 def setup_database():
-    """Initializes a fresh SQLite database for the iOS app."""
     if os.path.exists(DB_PATH):
         os.remove(DB_PATH)
     conn = sqlite3.connect(DB_PATH)
@@ -43,148 +70,203 @@ def setup_directories():
     if not os.path.exists(IMAGE_DIR):
         os.makedirs(IMAGE_DIR)
 
-def scrub_noise(text: str) -> str:
-    """
-    Aggressively cleans MGH WhiteBook specific noise from the markdown.
-    """
-    # 1. Remove exact UI phrases
-    ui_phrases = [
-        "Submit Feedback", "Table of Contents", "Return to Table of Contents",
-        "Suggest an Edit", "ACLS LOGISTICS & UPDATES"
-    ]
-    for phrase in ui_phrases:
-        # Case insensitive replacement
-        text = re.sub(f"(?i){phrase}", "", text)
+def encode_image_to_base64(image_path: str) -> str:
+    with open(image_path, "rb") as image_file:
+        return base64.b64encode(image_file.read()).decode('utf-8')
 
-    # 2. Strip standard Docling Image tags from the text
-    text = re.sub(r"", "", text)
+def build_batch_request(page_no: int, base64_image: str) -> dict:
+    prompt = """
+    You are an expert medical data extractor. Analyze this page from a medical manual.
     
-    # 3. Annihilate footers (Author Names and Page Numbers)
-    text = re.sub(r"([A-Z][a-z]+\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\s*\n*\s*\d{1,3}\s*$", "", text, flags=re.MULTILINE)
+    1. Identify the overarching topic of the page (e.g., "Cardiology > ACLS Tachycardia").
+    2. Extract ALL clinical data, especially from tables, flowcharts, and lists.
+    3. Convert every single row of a table or branch of an algorithm into a HIGHLY DENSE, SELF-CONTAINED paragraph.
     
-    # 4. Remove standalone page numbers sitting on their own line
-    text = re.sub(r"^\s*\d{1,3}\s*$", "", text, flags=re.MULTILINE)
-
-    # Clean up excessive newlines
-    text = re.sub(r"\n{3,}", "\n\n", text)
-    return text.strip()
-
-def extract_page_anchor(clean_md: str) -> str:
+    CRITICAL RULE: Never use pronouns or generic terms. Always restate the disease or drug name in every paragraph. 
+    Ignore page numbers, author names, and UI buttons like 'Suggest an Edit'.
     """
-    Extracts the top 3 meaningful lines of the page to create a robust, 
-    highly-specific context anchor for all chunks on this page.
-    """
-    # Grab lines that have actual content, strip out Markdown hashes
-    lines = [line.replace('#', '').strip() for line in clean_md.split('\n') if len(line.strip()) > 3]
-    
-    if not lines:
-        return "General Medical Reference"
-        
-    # Join the top 3 lines to guarantee we capture overarching categories and sub-topics
-    anchor_parts = lines[:3] 
-    return " > ".join(anchor_parts)
 
-def chunk_markdown(clean_md: str, page_num: int, page_anchor: str):
-    """
-    Slices the pristine markdown into overlapping, highly-dense context windows.
-    """
-    words = clean_md.split()
-    chunks = []
-    
-    if not words:
-        return chunks
-
-    for i in range(0, len(words), CHUNK_SIZE_WORDS - OVERLAP_WORDS):
-        chunk_words = words[i:i + CHUNK_SIZE_WORDS]
-        chunk_text = " ".join(chunk_words)
-        if len(chunk_text.strip()) > 20: # Ignore tiny fragments
-            chunks.append({
-                "id": str(uuid.uuid4()),
-                "text": chunk_text,
-                "page": page_num,
-                "anchor": page_anchor
-            })
-        
-        if i + CHUNK_SIZE_WORDS >= len(words):
-            break
-            
-    return chunks
-
-def main():
-    print(f"Starting HARDENED ingestion pipeline for {PDF_PATH}...")
-    setup_directories()
-    conn = setup_database()
-    cursor = conn.cursor()
-
-    print(f"Loading {MODEL_NAME}...")
-    model = SentenceTransformer(MODEL_NAME, trust_remote_code=True)
-
-    print("Configuring Docling for raw markdown extraction...")
-    pipeline_options = PdfPipelineOptions()
-    pipeline_options.generate_picture_images = True
-    
-    converter = DocumentConverter(
-        format_options={
-            InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)
+    response_format = {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "page_extraction",
+            "strict": True,
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "page_topic_anchor": {"type": "string"},
+                    "self_contained_chunks": {
+                        "type": "array",
+                        "items": {"type": "string"}
+                    }
+                },
+                "required": ["page_topic_anchor", "self_contained_chunks"],
+                "additionalProperties": False
+            }
         }
-    )
+    }
 
-    print("Parsing document (this will take a moment)...")
-    conv_result = converter.convert(PDF_PATH)
-    doc = conv_result.document
+    body = {
+        "model": OPENAI_MODEL,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
+                ]
+            }
+        ],
+        "response_format": response_format
+    }
 
-    all_chunks = []
+    return {
+        "custom_id": f"page_{page_no}",
+        "method": "POST",
+        "url": "/v1/chat/completions",
+        "body": body
+    }
 
-    # Iterate through the document page by page to ensure strict spatial grouping
-    for page_no, page_elements in tqdm(doc.pages.items(), desc="Processing Pages"):
+# --- Core Logic ---
+def main():
+    setup_directories()
+    state = load_state()
+
+    # PHASE 1: Build and Submit Batch
+    if not state:
+        print(f"--- Phase 1: Initiating Batch Submission for {PDF_PATH} ---")
+        print("1. Converting PDF to images and building batch file...")
+        pages = convert_from_path(PDF_PATH, dpi=300)
         
-        # 1. Extract raw markdown for this specific page
-        page_md = doc.export_to_markdown(page_no=page_no)
+        with open(BATCH_FILE, "w") as f:
+            for page_no, page_image in enumerate(tqdm(pages, desc="Encoding Pages"), start=1):
+                image_filename = f"page_{page_no}.png"
+                image_path = os.path.join(IMAGE_DIR, image_filename)
+                page_image.save(image_path, "PNG")
+                
+                base64_img = encode_image_to_base64(image_path)
+                req = build_batch_request(page_no, base64_img)
+                f.write(json.dumps(req) + "\n")
+
+        print("2. Uploading JSONL to OpenAI...")
+        batch_input_file = client.files.create(
+            file=open(BATCH_FILE, "rb"),
+            purpose="batch"
+        )
+
+        print("3. Creating Batch Job...")
+        batch = client.batches.create(
+            input_file_id=batch_input_file.id,
+            endpoint="/v1/chat/completions",
+            completion_window="24h"
+        )
         
-        # 2. Scrub the noise (footers, authors, buttons)
-        clean_md = scrub_noise(page_md)
+        save_state({"batch_id": batch.id})
         
-        if not clean_md:
-            continue
+        print(f"\n✅ Batch successfully submitted! (ID: {batch.id})")
+        print("Run this script again later to check the status.\n")
+        return
 
-        # 3. Establish the robust Page Anchor
-        page_anchor = extract_page_anchor(clean_md)
-
-        # 4. Dense Chunking
-        page_chunks = chunk_markdown(clean_md, page_no, page_anchor)
-        
-        # 5. Assign Image Flag
-        image_filename = f"page_{page_no}.png"
-        
-        for chunk in page_chunks:
-            chunk['image'] = image_filename
-            all_chunks.append(chunk)
-
-    print(f"Generated {len(all_chunks)} highly-dense chunks. Embedding...")
-
-    for chunk in tqdm(all_chunks, desc="Embedding Chunks"):
-        # The Anchor is prepended to ensure the vector space groups by medical category
-        embedding_input = f"[{chunk['anchor']}] {chunk['text']}"
-        embedding = model.encode(embedding_input)
-        embedding_blob = embedding.astype(np.float32).tobytes()
-
-        cursor.execute("""
-            INSERT INTO chunks (id, heading_context, text_content, page_start, page_end, image_filename, embedding)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (
-            chunk["id"],
-            chunk["anchor"],
-            chunk["text"],
-            chunk["page"],
-            chunk["page"],
-            chunk["image"],
-            embedding_blob
-        ))
-
-    conn.commit()
-    conn.close()
+    # PHASE 2 & 3: Check Status and Process Results
+    batch_id = state["batch_id"]
+    print(f"--- Phase 2: Checking Existing Batch (ID: {batch_id}) ---")
     
-    print("\n--- Pipeline Complete ---")
+    batch_status = client.batches.retrieve(batch_id)
+    status = batch_status.status
+
+    if status in ["validating", "in_progress", "finalizing"]:
+        print(f"⏳ Batch is still processing. Current status: '{status}'.")
+        print("Run the script again later.\n")
+        return
+        
+    if status in ["failed", "cancelled", "expired"]:
+        print(f"\n❌ Batch job ended with status: {status}")
+        
+        # Pull the specific errors from the batch object so you know exactly what broke
+        if hasattr(batch_status, 'errors') and batch_status.errors:
+            print("\n--- ERROR DETAILS ---")
+            for error in batch_status.errors.data:
+                line_info = f"(Line {error.line})" if getattr(error, 'line', None) else ""
+                print(f"[{error.code}] {error.message} {line_info}")
+            print("---------------------\n")
+            
+        print("Clearing state file so you can fix the issue and try again.")
+        clear_state()
+        return
+
+    if status == "completed":
+        print("\n✅ Batch completed! Downloading results...")
+        output_file_id = batch_status.output_file_id
+        
+        # If there are any file-level errors (where the batch succeeds but specific rows fail)
+        error_file_id = batch_status.error_file_id
+        if error_file_id:
+            print("⚠️ Some individual requests failed. Check the OpenAI dashboard for the error file.")
+
+        result_content = client.files.content(output_file_id).text
+
+        print("\n--- Phase 3: Embedding and Database Insertion ---")
+        print("Loading Embedding Model...")
+        model = SentenceTransformer(EMBED_MODEL, trust_remote_code=True)
+        conn = setup_database()
+        cursor = conn.cursor()
+
+        all_chunks = []
+
+        for line in result_content.strip().split('\n'):
+            res = json.loads(line)
+            custom_id = res['custom_id']
+            page_no = int(custom_id.split('_')[1])
+            
+            # Check if this specific request succeeded
+            if res['response']['status_code'] != 200:
+                print(f"Warning: Page {page_no} failed to generate. Skipping.")
+                continue
+                
+            content_str = res['response']['body']['choices'][0]['message']['content']
+            
+            try:
+                extraction = json.loads(content_str)
+                anchor = extraction.get('page_topic_anchor', 'General Medical Reference')
+                for text_chunk in extraction.get('self_contained_chunks', []):
+                    if len(text_chunk.strip()) > 20:
+                        all_chunks.append({
+                            "id": str(uuid.uuid4()),
+                            "text": text_chunk,
+                            "page": page_no,
+                            "anchor": anchor,
+                            "image": f"page_{page_no}.png"
+                        })
+            except json.JSONDecodeError:
+                print(f"Warning: Page {page_no} returned malformed JSON. Skipping.")
+
+        print(f"Generated {len(all_chunks)} chunks. Embedding into SQLite...")
+        
+        for chunk in tqdm(all_chunks, desc="Embedding"):
+            embedding_input = f"[{chunk['anchor']}] {chunk['text']}"
+            embedding = model.encode(embedding_input)
+            embedding_blob = embedding.astype(np.float32).tobytes()
+
+            cursor.execute("""
+                INSERT INTO chunks (id, heading_context, text_content, page_start, page_end, image_filename, embedding)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (
+                chunk["id"],
+                chunk["anchor"],
+                chunk["text"],
+                chunk["page"],
+                chunk["page"],
+                chunk["image"],
+                embedding_blob
+            ))
+
+        conn.commit()
+        conn.close()
+        
+        print("\n🧹 Cleaning up temporary state files...")
+        clear_state()
+            
+        print("\n🎉 Pipeline Complete! Your database is fully populated and ready for iOS.")
 
 if __name__ == "__main__":
     main()
