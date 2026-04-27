@@ -9,8 +9,7 @@ from llama_cpp import Llama
 # --- Configuration ---
 ROOT_DIR = Path(__file__).resolve().parent.parent
 DB_PATH = ROOT_DIR / "staffbook_kb.sqlite"
-# Update this to match your exact Qwen3 downloaded filename
-LLM_PATH = ROOT_DIR / "qwen3-4b-instruct-q4_k_m.gguf" 
+LLM_PATH = ROOT_DIR / "Qwen3-8B-Q4_K_M.gguf" # Update this to match your exact Qwen3 downloaded filename
 EMBED_MODEL = "Alibaba-NLP/gte-modernbert-base"
 
 # ANSI Colors for UI

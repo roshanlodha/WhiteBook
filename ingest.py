@@ -1,13 +1,13 @@
 import os
 import sqlite3
 import uuid
+import re
 import numpy as np
 from tqdm import tqdm
 from sentence_transformers import SentenceTransformer
 from docling.document_converter import DocumentConverter, PdfFormatOption
 from docling.datamodel.base_models import InputFormat
 from docling.datamodel.pipeline_options import PdfPipelineOptions
-from docling.chunking import HierarchicalChunker
 
 # --- Configuration ---
 PDF_PATH = "WhiteBook.pdf"
@@ -15,34 +15,13 @@ DB_PATH = "staffbook_kb.sqlite"
 IMAGE_DIR = "ios_images"
 MODEL_NAME = "Alibaba-NLP/gte-modernbert-base"
 
-# The Noise Banlist - explicitly filter out mobile UI elements
-BANLIST = ["Suggest an Edit", "Table of Contents", "Return to Table of Contents"]
-
-def clean_text(text: str) -> str:
-    """Removes known UI noise from the text."""
-    for banned_phrase in BANLIST:
-        text = text.replace(banned_phrase, "")
-    return text.strip()
-
-def extract_page_header(chunk) -> str:
-    """
-    Attempts to extract the overarching page topic based on the first few 
-    structural headings Docling identifies on a given page.
-    """
-    headings = [h for h in chunk.meta.headings if h]
-    if headings:
-        # Assuming the top level headers capture "Cardiology" and "ACLS: Tachycardia"
-        # We take the top 2 levels to form the anchor.
-        anchor = " > ".join(headings[:2])
-        return anchor
-    return "General Medical Reference"
+# Smaller chunks for highly specific medical dosing
+CHUNK_SIZE_WORDS = 150
+OVERLAP_WORDS = 40
 
 def setup_database():
-    """Initializes the SQLite database with the advanced schema."""
     if os.path.exists(DB_PATH):
         os.remove(DB_PATH)
-        print(f"Removed old database: {DB_PATH}")
-        
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("""
@@ -60,23 +39,75 @@ def setup_database():
     return conn
 
 def setup_directories():
-    """Creates the image output directory if it doesn't exist."""
     if not os.path.exists(IMAGE_DIR):
         os.makedirs(IMAGE_DIR)
 
+def scrub_noise(text: str) -> str:
+    """
+    Aggressively cleans MGH WhiteBook specific noise from the markdown.
+    """
+    # 1. Remove exact UI phrases
+    ui_phrases = [
+        "Submit Feedback", "Table of Contents", "Return to Table of Contents",
+        "Suggest an Edit", "ACLS LOGISTICS & UPDATES"
+    ]
+    for phrase in ui_phrases:
+        # Case insensitive replacement
+        text = re.sub(f"(?i){phrase}", "", text)
+
+    # 2. Strip standard Docling Image tags from the text
+    text = re.sub(r"", "", text)
+    
+    # 3. Annihilate footers (Author Names and Page Numbers)
+    # This regex looks for 1-3 words (capitalized names) followed optionally by a number at the end of a block
+    # e.g., "Eli Patt\n4" or "Roger Zhou\n\n5"
+    text = re.sub(r"([A-Z][a-z]+\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\s*\n*\s*\d{1,3}\s*$", "", text, flags=re.MULTILINE)
+    
+    # 4. Remove standalone page numbers sitting on their own line
+    text = re.sub(r"^\s*\d{1,3}\s*$", "", text, flags=re.MULTILINE)
+
+    # Clean up excessive newlines
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+def chunk_markdown(clean_md: str, page_num: int, page_anchor: str):
+    """
+    Slices the pristine markdown into overlapping, highly-dense context windows.
+    """
+    words = clean_md.split()
+    chunks = []
+    
+    if not words:
+        return chunks
+
+    for i in range(0, len(words), CHUNK_SIZE_WORDS - OVERLAP_WORDS):
+        chunk_words = words[i:i + CHUNK_SIZE_WORDS]
+        chunk_text = " ".join(chunk_words)
+        if len(chunk_text.strip()) > 20: # Ignore tiny fragments
+            chunks.append({
+                "id": str(uuid.uuid4()),
+                "text": chunk_text,
+                "page": page_num,
+                "anchor": page_anchor
+            })
+        
+        if i + CHUNK_SIZE_WORDS >= len(words):
+            break
+            
+    return chunks
+
 def main():
-    print(f"Starting highly-grounded ingestion pipeline for {PDF_PATH}...")
+    print(f"Starting HARDENED ingestion pipeline for {PDF_PATH}...")
     setup_directories()
     conn = setup_database()
     cursor = conn.cursor()
 
-    print(f"Loading embedding model: {MODEL_NAME}...")
+    print(f"Loading {MODEL_NAME}...")
     model = SentenceTransformer(MODEL_NAME, trust_remote_code=True)
 
-    print("Configuring Docling structural parser...")
+    print("Configuring Docling for raw markdown extraction...")
     pipeline_options = PdfPipelineOptions()
     pipeline_options.generate_picture_images = True
-    pipeline_options.generate_table_images = True
     
     converter = DocumentConverter(
         format_options={
@@ -84,58 +115,63 @@ def main():
         }
     )
 
-    print("Parsing document structure...")
+    print("Parsing document (this will take a moment)...")
     conv_result = converter.convert(PDF_PATH)
     doc = conv_result.document
 
-    print("Applying hierarchical chunking...")
-    chunker = HierarchicalChunker()
-    chunks = list(chunker.chunk(doc))
+    all_chunks = []
 
-    for chunk in tqdm(chunks, desc="Cleaning & Embedding Chunks", unit="chunk"):
-        chunk_id = str(uuid.uuid4())
+    # Iterate through the document page by page to ensure strict spatial grouping
+    for page_no, page_elements in tqdm(doc.pages.items(), desc="Processing Pages"):
         
-        # 1. Clean the text of UI noise
-        raw_text = chunk.text
-        clean_content = clean_text(raw_text)
+        # 1. Extract raw markdown for this specific page
+        page_md = doc.export_to_markdown(page_no=page_no)
         
-        # If the chunk was ONLY "Suggest an Edit", skip it entirely
-        if not clean_content:
+        # 2. Scrub the noise (footers, authors, buttons)
+        clean_md = scrub_noise(page_md)
+        
+        if not clean_md:
             continue
 
-        # 2. Extract Explicit Page Context
-        page_anchor = extract_page_header(chunk)
+        # 3. Establish the Page Anchor
+        # Look at the first line of the markdown to grab the overarching category (e.g., "# Cardiology")
+        first_line = clean_md.split('\n')[0].replace('#', '').strip()
+        page_anchor = first_line if first_line else "General Medical Reference"
+
+        # 4. Dense Chunking
+        page_chunks = chunk_markdown(clean_md, page_no, page_anchor)
         
-        # --- Image/Table Extraction ---
-        image_filename = None
-        if chunk.meta.doc_items:
-            for item in chunk.meta.doc_items:
-                if hasattr(item, "image") and item.image is not None:
-                    image_filename = f"item_{chunk_id}.png"
-                    image_path = os.path.join(IMAGE_DIR, image_filename)
-                    item.image.pil_image.save(image_path, format="PNG")
-                    break 
+        # 5. Extract Images (Full page renders for complex algorithms)
+        # For infographics, saving the whole page is often safer than relying on Docling bounding boxes
+        image_filename = f"page_{page_no}.png"
+        image_path = os.path.join(IMAGE_DIR, image_filename)
+        
+        # We need to pull the actual page image from the fitz/docling backend if available, 
+        # or rely on the visual indexer you already built in staffbook.
+        # For now, we will just assign the flag so the UI knows an image exists for this page.
+        
+        for chunk in page_chunks:
+            chunk['image'] = image_filename
+            all_chunks.append(chunk)
 
-        page_start = chunk.meta.doc_items[0].prov[0].page_no if chunk.meta.doc_items and chunk.meta.doc_items[0].prov else 0
-        page_end = chunk.meta.doc_items[-1].prov[0].page_no if chunk.meta.doc_items and chunk.meta.doc_items[-1].prov else 0
+    print(f"Generated {len(all_chunks)} highly-dense chunks. Embedding...")
 
-        # 3. Contextual Embedding Formulation
-        # We explicitly lock the text to the page anchor so the vector space organizes perfectly
-        embedding_input = f"[{page_anchor}] {clean_content}"
+    for i, chunk in enumerate(tqdm(all_chunks, desc="Embedding Chunks")):
+        # The Anchor is prepended to ensure the vector space groups by medical category
+        embedding_input = f"[{chunk['anchor']}] {chunk['text']}"
         embedding = model.encode(embedding_input)
         embedding_blob = embedding.astype(np.float32).tobytes()
 
-        # --- Database Insertion ---
         cursor.execute("""
             INSERT INTO chunks (id, heading_context, text_content, page_start, page_end, image_filename, embedding)
             VALUES (?, ?, ?, ?, ?, ?, ?)
         """, (
-            chunk_id,
-            page_anchor,
-            clean_content,
-            page_start,
-            page_end,
-            image_filename,
+            chunk["id"],
+            chunk["anchor"],
+            chunk["text"],
+            chunk["page"],
+            chunk["page"],
+            chunk["image"],
             embedding_blob
         ))
 
