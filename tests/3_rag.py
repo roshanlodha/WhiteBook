@@ -22,7 +22,10 @@ RESET = "\033[0m"
 def cosine_similarity(a, b):
     return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
 
-def retrieve_context(query, embedder, cursor, top_k=3):
+def retrieve_context(query, embedder, cursor, top_k=5, cutoff=0.6):
+    """
+    Retrieves up to top_k chunks, filtering out anything below the cutoff score.
+    """
     query_vec = embedder.encode(query).astype(np.float32)
     cursor.execute("SELECT id, heading_context, text_content, page_start, image_filename, embedding FROM chunks")
     rows = cursor.fetchall()
@@ -32,15 +35,21 @@ def retrieve_context(query, embedder, cursor, top_k=3):
         chunk_id, heading, text, page, img, blob = row
         db_vec = np.frombuffer(blob, dtype=np.float32)
         score = cosine_similarity(query_vec, db_vec)
-        results.append({
-            "score": score,
-            "heading": heading,
-            "text": text,
-            "page": page,
-            "image": img
-        })
         
+        # 1. The Quality Gate: Reject low-relevance noise
+        if score >= cutoff:
+            results.append({
+                "score": score,
+                "heading": heading,
+                "text": text,
+                "page": page,
+                "image": img
+            })
+        
+    # Sort the surviving chunks by descending similarity score
     results.sort(key=lambda x: x["score"], reverse=True)
+    
+    # 2. The Memory Gate: Enforce a strict ceiling to protect the context window
     return results[:top_k]
 
 def build_system_prompt():
@@ -88,7 +97,7 @@ def main():
                 continue
                 
             # --- RETRIEVAL ---
-            top_chunks = retrieve_context(query, embedder, cursor, top_k=3)
+            top_chunks = retrieve_context(query, embedder, cursor)
             
             print(f"\n{BOLD}--- Retrieved Context ---{RESET}")
             context_string = ""

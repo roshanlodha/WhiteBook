@@ -3,6 +3,8 @@
 */.DS_Store
 WhiteBook.pdf
 ios_images/*
+WhiteBook/WhiteBook/ios_images/*
+WhiteBook/WhiteBook/ios_images/**
 *.sqlite*
 *.gguf
 *.json*

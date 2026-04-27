@@ -1,20 +1,3 @@
-### **Phase 1: The Offline Ingestion Pipeline**
-> "We are building an offline data ingestion pipeline for an iOS application. Act as a senior data engineer. Write a Python script (`ingest_to_sqlite.py`) that processes a PDF and outputs a SQLite database and an image directory.
-> 
-> **Environment & Setup:**
-> 1. Use the following libraries: `docling`, `sentence-transformers`, `pandas`, `Pillow`, and `numpy`.
-> 2. Initialize a SQLite database `staffbook_kb.sqlite` with a `chunks` table: `id` (TEXT PRIMARY KEY), `heading_context` (TEXT), `text_content` (TEXT), `page_start` (INTEGER), `page_end` (INTEGER), `image_filename` (TEXT), and `embedding` (BLOB). Create an `ios_images` directory.
-> 
-> **Extraction & Chunking:**
-> 1. Configure Docling's `DocumentConverter` with `PdfPipelineOptions(generate_picture_images=True, generate_table_images=True)`.
-> 2. Parse the PDF and use Docling's `HierarchicalChunker` to chunk the text.
-> 3. For each chunk, extract the structural headings from `chunk.meta.headings` and prepend it as context (e.g., '[Cardiology > ACLS] chunk text'). 
-> 4. If the chunk contains an `item.image` in its metadata, save that specific PIL image bounding box to `ios_images/item_{id}.png` and store the filename.
-> 
-> **Embedding:**
-> 1. Load `Alibaba-NLP/gte-modernbert-base` via `SentenceTransformer(trust_remote_code=True)`.
-> 2. Generate embeddings for the text content, convert them to `float32` bytes using NumPy, and insert the records into the SQLite database. Provide the complete, runnable Python code."
-
 ### **Phase 2: iOS Initialization & Database Bridge**
 > "We are transitioning to Xcode to build the iOS app. 
 > 
