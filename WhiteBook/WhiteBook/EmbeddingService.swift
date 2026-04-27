@@ -18,7 +18,7 @@ final class EmbeddingService {
         var errorDescription: String? {
             switch self {
             case .modelNotFound:
-                return "WhiteBookEmbedder.mlpackage was not found in Bundle.main."
+                return "WhiteBookEmbedder model was not found in Bundle.main (.mlmodelc or .mlpackage)."
             case .invalidModelInput(let detail):
                 return "Invalid model input: \(detail)"
             case .predictionFailed(let detail):
@@ -28,7 +28,6 @@ final class EmbeddingService {
             }
         }
     }
-
     private let model: MLModel
     private let inputShape: [NSNumber]
     private let sequenceLength: Int
@@ -39,13 +38,18 @@ final class EmbeddingService {
 
     private init() {
         do {
-            guard let modelURL = Bundle.main.url(forResource: "WhiteBookEmbedder", withExtension: "mlpackage") else {
+            let configuration = MLModelConfiguration()
+            configuration.computeUnits = .all
+
+            // iOS apps include the compiled model directory in app bundles.
+            if let compiledURL = Bundle.main.url(forResource: "WhiteBookEmbedder", withExtension: "mlmodelc") {
+                self.model = try MLModel(contentsOf: compiledURL, configuration: configuration)
+            } else if let sourceURL = Bundle.main.url(forResource: "WhiteBookEmbedder", withExtension: "mlpackage") {
+                self.model = try MLModel(contentsOf: sourceURL, configuration: configuration)
+            } else {
                 throw EmbeddingError.modelNotFound
             }
 
-            let configuration = MLModelConfiguration()
-            configuration.computeUnits = .all
-            self.model = try MLModel(contentsOf: modelURL, configuration: configuration)
             let inputSpec = EmbeddingService.resolveInputSpec(from: model)
             self.inputShape = inputSpec.shape
             self.sequenceLength = inputSpec.sequenceLength

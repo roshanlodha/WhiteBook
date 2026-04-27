@@ -1,26 +1,3 @@
-### **Phase 2: iOS Initialization & Database Bridge**
-> "We are transitioning to Xcode to build the iOS app. 
-> 
-> **Project Setup:**
-> 1. Provide instructions to create a new iOS Swift project targeting iOS 17.0+. 
-> 2. Add `SQLite.swift` via Swift Package Manager.
-> 
-> **Database Integration (`DatabaseService.swift`):**
-> 1. Instruct how to add `staffbook_kb.sqlite` and the `ios_images` folder into the Xcode project bundle.
-> 2. Write a `DatabaseService` that locates the SQLite file in `Bundle.main`, copies it to the app's `DocumentDirectory` on first launch, and opens a connection.
-> 3. Define the Swift data models matching our schema. Implement a function to retrieve text chunks by ID, returning the text, heading context, and any associated `image_filename`. Provide the robust Swift code."
-
-### **Phase 3: CoreML & Native Vector Search**
-> "Implement on-device vector search.
-> 
-> **Embedding Extraction (`EmbeddingService.swift`):**
-> 1. Assume we have converted `Alibaba-NLP/gte-modernbert-base` into a CoreML `.mlpackage` and added it to the bundle.
-> 2. Write an `EmbeddingService.swift` class that takes a user query, tokenizes it, runs it through the CoreML model, and returns a `[Float32]` array.
-> 
-> **Vector Matching (`SearchService.swift`):**
-> 1. Write a high-performance native Swift cosine similarity function.
-> 2. Write a `search(query: String)` function that embeds the query, fetches all BLOBs from `DatabaseService`, calculates similarities in a background `Task`, and returns the top 3 most relevant text chunks."
-
 ### **Phase 4: Qwen3 Local Inference Engine**
 > "Integrate the generative AI engine.
 > 
