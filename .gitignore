@@ -8,6 +8,7 @@ WhiteBook/WhiteBook/ios_images/**
 *.sqlite*
 *.gguf
 *.json*
+WhiteBookEmbedder.mlpackage
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
