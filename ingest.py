@@ -2,6 +2,7 @@ import os
 import sqlite3
 import uuid
 import numpy as np
+from tqdm import tqdm
 from sentence_transformers import SentenceTransformer
 from docling.document_converter import DocumentConverter, PdfFormatOption
 from docling.datamodel.base_models import InputFormat
@@ -11,8 +12,30 @@ from docling.chunking import HierarchicalChunker
 # --- Configuration ---
 PDF_PATH = "WhiteBook.pdf"
 DB_PATH = "staffbook_kb.sqlite"
-IMAGE_DIR = "images"
+IMAGE_DIR = "ios_images"
 MODEL_NAME = "Alibaba-NLP/gte-modernbert-base"
+
+# The Noise Banlist - explicitly filter out mobile UI elements
+BANLIST = ["Suggest an Edit", "Table of Contents", "Return to Table of Contents"]
+
+def clean_text(text: str) -> str:
+    """Removes known UI noise from the text."""
+    for banned_phrase in BANLIST:
+        text = text.replace(banned_phrase, "")
+    return text.strip()
+
+def extract_page_header(chunk) -> str:
+    """
+    Attempts to extract the overarching page topic based on the first few 
+    structural headings Docling identifies on a given page.
+    """
+    headings = [h for h in chunk.meta.headings if h]
+    if headings:
+        # Assuming the top level headers capture "Cardiology" and "ACLS: Tachycardia"
+        # We take the top 2 levels to form the anchor.
+        anchor = " > ".join(headings[:2])
+        return anchor
+    return "General Medical Reference"
 
 def setup_database():
     """Initializes the SQLite database with the advanced schema."""
@@ -22,7 +45,6 @@ def setup_database():
         
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    # Note the change: image_filename instead of has_image for precise mapping
     cursor.execute("""
         CREATE TABLE chunks (
             id TEXT PRIMARY KEY,
@@ -38,20 +60,19 @@ def setup_database():
     return conn
 
 def setup_directories():
+    """Creates the image output directory if it doesn't exist."""
     if not os.path.exists(IMAGE_DIR):
         os.makedirs(IMAGE_DIR)
 
 def main():
-    print(f"Starting advanced ingestion pipeline for {PDF_PATH}...")
+    print(f"Starting highly-grounded ingestion pipeline for {PDF_PATH}...")
     setup_directories()
     conn = setup_database()
     cursor = conn.cursor()
 
-    # 1. Load Embedding Model
     print(f"Loading embedding model: {MODEL_NAME}...")
     model = SentenceTransformer(MODEL_NAME, trust_remote_code=True)
 
-    # 2. Configure Docling for precise image and table extraction
     print("Configuring Docling structural parser...")
     pipeline_options = PdfPipelineOptions()
     pipeline_options.generate_picture_images = True
@@ -63,49 +84,44 @@ def main():
         }
     )
 
-    # 3. Parse the PDF Document
-    print("Parsing document structure (this may take a moment)...")
+    print("Parsing document structure...")
     conv_result = converter.convert(PDF_PATH)
     doc = conv_result.document
 
-    # 4. Perform Hierarchical Chunking
-    # This automatically groups text under its relevant headers based on the TOC/Formatting
     print("Applying hierarchical chunking...")
     chunker = HierarchicalChunker()
     chunks = list(chunker.chunk(doc))
 
-    print(f"Generated {len(chunks)} structurally-aware chunks. Generating embeddings...")
-
-    for i, chunk in enumerate(chunks):
+    for chunk in tqdm(chunks, desc="Cleaning & Embedding Chunks", unit="chunk"):
         chunk_id = str(uuid.uuid4())
         
-        # --- Metadata Extraction ---
-        # Extract the hierarchical path (e.g., "Cardiology > ACLS > Bradycardia")
-        headings = [h.text for h in chunk.meta.headings if h.text]
-        heading_context = " > ".join(headings) if headings else "General Reference"
+        # 1. Clean the text of UI noise
+        raw_text = chunk.text
+        clean_content = clean_text(raw_text)
         
-        text_content = chunk.text
-        if not text_content.strip():
+        # If the chunk was ONLY "Suggest an Edit", skip it entirely
+        if not clean_content:
             continue
 
+        # 2. Extract Explicit Page Context
+        page_anchor = extract_page_header(chunk)
+        
         # --- Image/Table Extraction ---
-        # Look for image or table items specifically within this chunk's bounding boxes
         image_filename = None
-        for item in chunk.meta.doc_items:
-            if hasattr(item, "image") and item.image is not None:
-                image_filename = f"item_{chunk_id}.png"
-                image_path = os.path.join(IMAGE_DIR, image_filename)
-                # Save the specific figure/table, not the whole page
-                item.image.pil_image.save(image_path, format="PNG")
-                break # Bind the first major visual item found in this chunk
+        if chunk.meta.doc_items:
+            for item in chunk.meta.doc_items:
+                if hasattr(item, "image") and item.image is not None:
+                    image_filename = f"item_{chunk_id}.png"
+                    image_path = os.path.join(IMAGE_DIR, image_filename)
+                    item.image.pil_image.save(image_path, format="PNG")
+                    break 
 
-        # Pages can span multiple items in a chunk
-        page_start = chunk.meta.doc_items[0].prov[0].page_no if chunk.meta.doc_items else 0
-        page_end = chunk.meta.doc_items[-1].prov[0].page_no if chunk.meta.doc_items else 0
+        page_start = chunk.meta.doc_items[0].prov[0].page_no if chunk.meta.doc_items and chunk.meta.doc_items[0].prov else 0
+        page_end = chunk.meta.doc_items[-1].prov[0].page_no if chunk.meta.doc_items and chunk.meta.doc_items[-1].prov else 0
 
-        # --- Contextual Embedding Formulation ---
-        # We prepend the heading context so the model links the text to the specific medical topic
-        embedding_input = f"search_document: [{heading_context}] {text_content}"
+        # 3. Contextual Embedding Formulation
+        # We explicitly lock the text to the page anchor so the vector space organizes perfectly
+        embedding_input = f"[{page_anchor}] {clean_content}"
         embedding = model.encode(embedding_input)
         embedding_blob = embedding.astype(np.float32).tobytes()
 
@@ -115,23 +131,18 @@ def main():
             VALUES (?, ?, ?, ?, ?, ?, ?)
         """, (
             chunk_id,
-            heading_context,
-            text_content,
+            page_anchor,
+            clean_content,
             page_start,
             page_end,
             image_filename,
             embedding_blob
         ))
 
-        if (i + 1) % 50 == 0:
-            print(f"Processed {i + 1}/{len(chunks)} chunks...")
-
     conn.commit()
     conn.close()
     
     print("\n--- Pipeline Complete ---")
-    print(f"Database saved to: {DB_PATH}")
-    print(f"Specific figures/tables saved to: ./{IMAGE_DIR}/")
 
 if __name__ == "__main__":
     main()

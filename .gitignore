@@ -2,8 +2,9 @@
 .DS_Store
 */.DS_Store
 WhiteBook.pdf
-images/*
+ios_images/*
 *.sqlite*
+*.gguf
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
