@@ -75,14 +75,16 @@ def encode_image_to_base64(image_path: str) -> str:
         return base64.b64encode(image_file.read()).decode('utf-8')
 
 def build_batch_request(page_no: int, base64_image: str) -> dict:
+    # --- UPGRADED MULTIMODAL PROMPT ---
     prompt = """
     You are an expert medical data extractor. Analyze this page from a medical manual.
     
     1. Identify the overarching topic of the page (e.g., "Cardiology > ACLS Tachycardia").
-    2. Extract ALL clinical data, especially from tables, flowcharts, and lists.
-    3. Convert every single row of a table or branch of an algorithm into a HIGHLY DENSE, SELF-CONTAINED paragraph.
+    2. Extract ALL clinical data, including tables, flowcharts, lists, AND purely visual diagrams (e.g., anatomical patch placements, device interfaces, EKG strips).
+    3. Convert every row of a table, branch of a flowchart, or visual diagram into a HIGHLY DENSE, SELF-CONTAINED paragraph.
+    4. If there is a visual illustration (like defibrillator pad placement or a device monitor), write a highly descriptive paragraph explaining exactly what it shows spatially and functionally so a reader who cannot see the image understands it perfectly.
     
-    CRITICAL RULE: Never use pronouns or generic terms. Always restate the disease or drug name in every paragraph. 
+    CRITICAL RULE: Never use pronouns or generic terms. Always restate the disease, drug name, or procedure in every paragraph. 
     Ignore page numbers, author names, and UI buttons like 'Suggest an Edit'.
     """
 
@@ -135,14 +137,16 @@ def main():
     # PHASE 1: Build and Submit Batch
     if not state:
         print(f"--- Phase 1: Initiating Batch Submission for {PDF_PATH} ---")
-        print("1. Converting PDF to images and building batch file...")
-        pages = convert_from_path(PDF_PATH, dpi=300)
+        print("1. Converting PDF to OPTIMIZED images and building batch file...")
+        
+        pages = convert_from_path(PDF_PATH, dpi=150)
         
         with open(BATCH_FILE, "w") as f:
             for page_no, page_image in enumerate(tqdm(pages, desc="Encoding Pages"), start=1):
-                image_filename = f"page_{page_no}.png"
+                image_filename = f"page_{page_no}.jpg"
                 image_path = os.path.join(IMAGE_DIR, image_filename)
-                page_image.save(image_path, "PNG")
+                
+                page_image.save(image_path, "JPEG", optimize=True, quality=85)
                 
                 base64_img = encode_image_to_base64(image_path)
                 req = build_batch_request(page_no, base64_img)
@@ -182,7 +186,6 @@ def main():
     if status in ["failed", "cancelled", "expired"]:
         print(f"\n❌ Batch job ended with status: {status}")
         
-        # Pull the specific errors from the batch object so you know exactly what broke
         if hasattr(batch_status, 'errors') and batch_status.errors:
             print("\n--- ERROR DETAILS ---")
             for error in batch_status.errors.data:
@@ -198,9 +201,7 @@ def main():
         print("\n✅ Batch completed! Downloading results...")
         output_file_id = batch_status.output_file_id
         
-        # If there are any file-level errors (where the batch succeeds but specific rows fail)
-        error_file_id = batch_status.error_file_id
-        if error_file_id:
+        if batch_status.error_file_id:
             print("⚠️ Some individual requests failed. Check the OpenAI dashboard for the error file.")
 
         result_content = client.files.content(output_file_id).text
@@ -218,7 +219,6 @@ def main():
             custom_id = res['custom_id']
             page_no = int(custom_id.split('_')[1])
             
-            # Check if this specific request succeeded
             if res['response']['status_code'] != 200:
                 print(f"Warning: Page {page_no} failed to generate. Skipping.")
                 continue
@@ -235,7 +235,7 @@ def main():
                             "text": text_chunk,
                             "page": page_no,
                             "anchor": anchor,
-                            "image": f"page_{page_no}.png"
+                            "image": f"page_{page_no}.jpg" 
                         })
             except json.JSONDecodeError:
                 print(f"Warning: Page {page_no} returned malformed JSON. Skipping.")
