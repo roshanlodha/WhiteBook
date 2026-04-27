@@ -8,7 +8,6 @@
 
 /* Begin PBXBuildFile section */
 		50094B4C2F9F5947009203CB /* SQLite in Frameworks */ = {isa = PBXBuildFile; productRef = 50094B4B2F9F5947009203CB /* SQLite */; };
-		50094B4E2F9F5947009203CB /* SQLite-Dynamic in Frameworks */ = {isa = PBXBuildFile; productRef = 50094B4D2F9F5947009203CB /* SQLite-Dynamic */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -28,7 +27,6 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				50094B4E2F9F5947009203CB /* SQLite-Dynamic in Frameworks */,
 				50094B4C2F9F5947009203CB /* SQLite in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -73,7 +71,6 @@
 			name = WhiteBook;
 			packageProductDependencies = (
 				50094B4B2F9F5947009203CB /* SQLite */,
-				50094B4D2F9F5947009203CB /* SQLite-Dynamic */,
 			);
 			productName = WhiteBook;
 			productReference = 50CAF5C12F9F29E600A53625 /* WhiteBook.app */;
@@ -384,11 +381,6 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 50094B4A2F9F5947009203CB /* XCRemoteSwiftPackageReference "SQLite" */;
 			productName = SQLite;
-		};
-		50094B4D2F9F5947009203CB /* SQLite-Dynamic */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 50094B4A2F9F5947009203CB /* XCRemoteSwiftPackageReference "SQLite" */;
-			productName = "SQLite-Dynamic";
 		};
 /* End XCSwiftPackageProductDependency section */
 	};
