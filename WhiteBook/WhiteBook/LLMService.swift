@@ -39,6 +39,12 @@ final class LLMService {
 
     private init() {}
 
+    func cancelModelDownload() {
+        Task {
+            await engine.cancelDownload()
+        }
+    }
+
     func prepareModelIfNeeded(progress: (@MainActor @Sendable (Double) -> Void)? = nil) async throws {
         let reporter: (@Sendable (Double) -> Void)?
         if let progress {
@@ -110,6 +116,205 @@ final class LLMService {
     }
 }
 
+final class ModelDownloadCoordinator: NSObject, URLSessionDownloadDelegate, URLSessionTaskDelegate {
+    static let shared = ModelDownloadCoordinator()
+    static let sessionIdentifier = "com.roshanlodha.WhiteBook.model-download"
+
+    private struct TaskState {
+        let destinationURL: URL
+        var progressHandlers: [(@Sendable (Double) -> Void)]
+        var continuations: [CheckedContinuation<URL, Error>]
+    }
+
+    private let stateQueue = DispatchQueue(label: "com.roshanlodha.WhiteBook.model-download.state")
+    private let destinationDefaultsPrefix = "com.roshanlodha.WhiteBook.model-download.destination."
+    private var taskStates: [Int: TaskState] = [:]
+    private var backgroundCompletionHandler: (() -> Void)?
+
+    private lazy var session: URLSession = {
+        let configuration = URLSessionConfiguration.background(withIdentifier: Self.sessionIdentifier)
+        configuration.allowsCellularAccess = true
+        configuration.allowsConstrainedNetworkAccess = true
+        configuration.allowsExpensiveNetworkAccess = true
+        configuration.isDiscretionary = false
+        configuration.sessionSendsLaunchEvents = true
+        return URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
+    }()
+
+    private override init() {
+        super.init()
+    }
+
+    func handleEventsForBackgroundURLSession(identifier: String, completionHandler: @escaping () -> Void) {
+        guard identifier == Self.sessionIdentifier else {
+            return
+        }
+
+        stateQueue.async {
+            self.backgroundCompletionHandler = completionHandler
+        }
+    }
+
+    func downloadModel(from remoteURL: URL, to destinationURL: URL, progress: (@Sendable (Double) -> Void)?) async throws -> URL {
+        if FileManager.default.fileExists(atPath: destinationURL.path) {
+            progress?(1.0)
+            return destinationURL
+        }
+
+        let downloadTask = await existingTask(matching: remoteURL) ?? session.downloadTask(with: remoteURL)
+
+        return try await withCheckedThrowingContinuation { continuation in
+            stateQueue.async {
+                var state = self.taskStates[downloadTask.taskIdentifier] ?? TaskState(
+                    destinationURL: destinationURL,
+                    progressHandlers: [],
+                    continuations: []
+                )
+
+                if let progress {
+                    state.progressHandlers.append(progress)
+                }
+                state.continuations.append(continuation)
+                self.taskStates[downloadTask.taskIdentifier] = state
+                self.persistDestination(destinationURL, for: downloadTask.taskIdentifier)
+
+                if downloadTask.state == .suspended {
+                    downloadTask.resume()
+                }
+            }
+        }
+    }
+
+    func cancelAllModelDownloads() async {
+        let tasks = await allTasks()
+        for task in tasks {
+            task.cancel()
+        }
+    }
+
+    private func existingTask(matching remoteURL: URL) async -> URLSessionDownloadTask? {
+        let tasks = await allTasks()
+        return tasks
+            .compactMap { $0 as? URLSessionDownloadTask }
+            .first { task in
+                guard let originalURL = task.originalRequest?.url else {
+                    return false
+                }
+                return originalURL == remoteURL && task.state != .canceling
+            }
+    }
+
+    private func allTasks() async -> [URLSessionTask] {
+        await withCheckedContinuation { continuation in
+            session.getAllTasks { tasks in
+                continuation.resume(returning: tasks)
+            }
+        }
+    }
+
+    private func completeTask(taskIdentifier: Int, result: Result<URL, Error>) {
+        stateQueue.async {
+            self.removePersistedDestination(for: taskIdentifier)
+
+            guard let state = self.taskStates.removeValue(forKey: taskIdentifier) else {
+                return
+            }
+
+            switch result {
+            case .success(let url):
+                state.progressHandlers.forEach { $0(1.0) }
+                state.continuations.forEach { $0.resume(returning: url) }
+            case .failure(let error):
+                state.continuations.forEach { $0.resume(throwing: error) }
+            }
+        }
+    }
+
+    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didWriteData bytesWritten: Int64, totalBytesWritten: Int64, totalBytesExpectedToWrite: Int64) {
+        guard totalBytesExpectedToWrite > 0 else {
+            return
+        }
+
+        let fraction = min(1.0, Double(totalBytesWritten) / Double(totalBytesExpectedToWrite))
+
+        stateQueue.async {
+            guard let state = self.taskStates[downloadTask.taskIdentifier] else {
+                return
+            }
+
+            state.progressHandlers.forEach { $0(fraction) }
+        }
+    }
+
+    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
+        let fileManager = FileManager.default
+
+        stateQueue.async {
+            let destinationURL: URL
+            if let state = self.taskStates[downloadTask.taskIdentifier] {
+                destinationURL = state.destinationURL
+            } else if let persistedPath = self.persistedDestinationPath(for: downloadTask.taskIdentifier) {
+                destinationURL = URL(fileURLWithPath: persistedPath)
+            } else {
+                return
+            }
+
+            do {
+                let destinationDirectory = destinationURL.deletingLastPathComponent()
+                if !fileManager.fileExists(atPath: destinationDirectory.path) {
+                    try fileManager.createDirectory(at: destinationDirectory, withIntermediateDirectories: true)
+                }
+
+                if fileManager.fileExists(atPath: destinationURL.path) {
+                    try fileManager.removeItem(at: destinationURL)
+                }
+
+                try fileManager.moveItem(at: location, to: destinationURL)
+                self.completeTask(taskIdentifier: downloadTask.taskIdentifier, result: .success(destinationURL))
+            } catch {
+                self.completeTask(taskIdentifier: downloadTask.taskIdentifier, result: .failure(error))
+            }
+        }
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        guard let error else {
+            return
+        }
+
+        completeTask(taskIdentifier: task.taskIdentifier, result: .failure(error))
+    }
+
+    func urlSessionDidFinishEvents(forBackgroundURLSession session: URLSession) {
+        stateQueue.async {
+            guard let completion = self.backgroundCompletionHandler else {
+                return
+            }
+
+            self.backgroundCompletionHandler = nil
+            DispatchQueue.main.async {
+                completion()
+            }
+        }
+    }
+
+    private func destinationDefaultsKey(for taskIdentifier: Int) -> String {
+        "\(destinationDefaultsPrefix)\(taskIdentifier)"
+    }
+
+    private func persistDestination(_ destinationURL: URL, for taskIdentifier: Int) {
+        UserDefaults.standard.set(destinationURL.path, forKey: destinationDefaultsKey(for: taskIdentifier))
+    }
+
+    private func removePersistedDestination(for taskIdentifier: Int) {
+        UserDefaults.standard.removeObject(forKey: destinationDefaultsKey(for: taskIdentifier))
+    }
+
+    private func persistedDestinationPath(for taskIdentifier: Int) -> String? {
+        UserDefaults.standard.string(forKey: destinationDefaultsKey(for: taskIdentifier))
+    }
+}
+
 private actor LLMEngine {
     private let modelCandidates = [
         "Qwen3-8B-Q4_K_M.gguf",
@@ -120,6 +325,10 @@ private actor LLMEngine {
     private var modelPointer: OpaquePointer?
     private var contextPointer: OpaquePointer?
     private var didInitBackend = false
+
+    func cancelDownload() async {
+        await ModelDownloadCoordinator.shared.cancelAllModelDownloads()
+    }
 
     deinit {
         if let contextPointer {
@@ -252,20 +461,23 @@ private actor LLMEngine {
     }
 
     private func ensureModelFile(progress: (@Sendable (Double) -> Void)? = nil) async throws -> URL {
-        let documentsURL = try modelDirectoryURL()
+        let modelDirectories = try modelDirectoryURLs()
+        let primaryDirectoryURL = modelDirectories[0]
         let fileManager = FileManager.default
 
-        for modelName in modelCandidates {
-            let destination = documentsURL.appendingPathComponent(modelName)
-            if fileManager.fileExists(atPath: destination.path) {
-                progress?(1.0)
-                return destination
+        for directory in modelDirectories {
+            for modelName in modelCandidates {
+                let destination = directory.appendingPathComponent(modelName)
+                if fileManager.fileExists(atPath: destination.path) {
+                    progress?(1.0)
+                    return destination
+                }
             }
         }
 
         for modelName in modelCandidates {
             if let bundledURL = Bundle.main.url(forResource: modelName.replacingOccurrences(of: ".gguf", with: ""), withExtension: "gguf") {
-                let destination = documentsURL.appendingPathComponent(modelName)
+                let destination = primaryDirectoryURL.appendingPathComponent(modelName)
                 if !fileManager.fileExists(atPath: destination.path) {
                     try fileManager.copyItem(at: bundledURL, to: destination)
                 }
@@ -274,59 +486,9 @@ private actor LLMEngine {
             }
         }
 
-        let destination = documentsURL.appendingPathComponent(modelCandidates[0])
+        let destination = primaryDirectoryURL.appendingPathComponent(modelCandidates[0])
         do {
-            let tempURL = documentsURL.appendingPathComponent("qwen_download.partial")
-            let (bytes, response) = try await URLSession.shared.bytes(from: downloadURL)
-            if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-                throw LLMService.LLMServiceError.modelDownloadFailed("HTTP \(http.statusCode)")
-            }
-
-            let expectedBytes = response.expectedContentLength
-            if fileManager.fileExists(atPath: tempURL.path) {
-                try fileManager.removeItem(at: tempURL)
-            }
-
-            fileManager.createFile(atPath: tempURL.path, contents: nil)
-            let fileHandle = try FileHandle(forWritingTo: tempURL)
-
-            var receivedBytes: Int64 = 0
-            var buffer = Data()
-            buffer.reserveCapacity(64 * 1024)
-
-            do {
-                for try await byte in bytes {
-                    try Task.checkCancellation()
-
-                    buffer.append(byte)
-                    receivedBytes += 1
-
-                    if buffer.count >= 64 * 1024 {
-                        try fileHandle.write(contentsOf: buffer)
-                        buffer.removeAll(keepingCapacity: true)
-                    }
-
-                    if expectedBytes > 0, receivedBytes.isMultiple(of: 32 * 1024) {
-                        let fraction = min(1.0, Double(receivedBytes) / Double(expectedBytes))
-                        progress?(fraction)
-                    }
-                }
-
-                if !buffer.isEmpty {
-                    try fileHandle.write(contentsOf: buffer)
-                }
-
-                try fileHandle.close()
-            } catch {
-                try? fileHandle.close()
-                try? fileManager.removeItem(at: tempURL)
-                throw error
-            }
-
-            if fileManager.fileExists(atPath: destination.path) {
-                try fileManager.removeItem(at: destination)
-            }
-            try fileManager.moveItem(at: tempURL, to: destination)
+            _ = try await ModelDownloadCoordinator.shared.downloadModel(from: downloadURL, to: destination, progress: progress)
             progress?(1.0)
             return destination
         } catch is CancellationError {
@@ -336,7 +498,17 @@ private actor LLMEngine {
         }
     }
 
-    private func modelDirectoryURL() throws -> URL {
+    private func modelDirectoryURLs() throws -> [URL] {
+        let localDirectory = try localModelDirectoryURL()
+
+        if let iCloudDirectory = try iCloudModelDirectoryURL() {
+            return [iCloudDirectory, localDirectory]
+        }
+
+        return [localDirectory]
+    }
+
+    private func localModelDirectoryURL() throws -> URL {
         guard let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else {
             throw LLMService.LLMServiceError.modelNotFound
         }
@@ -344,6 +516,23 @@ private actor LLMEngine {
         let modelsDirectory = documents.appendingPathComponent("Models", isDirectory: true)
         if !FileManager.default.fileExists(atPath: modelsDirectory.path) {
             try FileManager.default.createDirectory(at: modelsDirectory, withIntermediateDirectories: true)
+        }
+
+        return modelsDirectory
+    }
+
+    private func iCloudModelDirectoryURL() throws -> URL? {
+        let fileManager = FileManager.default
+        guard let ubiquityRoot = fileManager.url(forUbiquityContainerIdentifier: nil) else {
+            return nil
+        }
+
+        let modelsDirectory = ubiquityRoot
+            .appendingPathComponent("Documents", isDirectory: true)
+            .appendingPathComponent("WhiteBookModels", isDirectory: true)
+
+        if !fileManager.fileExists(atPath: modelsDirectory.path) {
+            try fileManager.createDirectory(at: modelsDirectory, withIntermediateDirectories: true)
         }
 
         return modelsDirectory

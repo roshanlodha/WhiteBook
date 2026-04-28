@@ -39,6 +39,7 @@ final class AssistantViewModel: ObservableObject {
     }
 
     func cancelModelDownload() {
+        llmService.cancelModelDownload()
         prepareTask?.cancel()
         prepareTask = nil
         isPreparingModel = false
