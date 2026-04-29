@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any, AsyncGenerator
 
 from llama_cpp import Llama
-from app.calculators import calculate_procainamide_dose, convert_lbs_to_kg, calculate_math
+from app.calculators import calculate_math
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 DEFAULT_LLM_PATH = ROOT_DIR / "Qwen3-8B-Q4_K_M.gguf"
