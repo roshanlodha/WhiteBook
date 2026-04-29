@@ -1,36 +1,29 @@
 :root {
 	color-scheme: light dark;
-	--bg: #071019;
-	--bg-elevated: #0a1521;
-	--panel: #0d1722;
-	--panel-strong: #111f2f;
-	--border: rgba(255, 255, 255, 0.08);
-	--text: #f3f6fa;
-	--muted: #9ba8b7;
-	--accent: #ff9d00;
-	--accent-soft: rgba(255, 157, 0, 0.12);
-	--shadow: 0 18px 60px rgba(0, 0, 0, 0.34);
 	--font: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-}
-
-* {
+		display: grid;
+		gap: 0.15rem;
+		margin-bottom: 0.7rem;
 	box-sizing: border-box;
 }
 
-html,
-body {
-	height: 100%;
-}
+		margin: 0;
+		padding: 0;
+		border: 0;
+		background: transparent;
 
 body {
 	margin: 0;
 	font-family: var(--font);
 	background: var(--bg);
-	color: var(--text);
+		display: inline-flex;
+		align-items: center;
+		gap: 0.45rem;
+		padding: 0;
+		margin: 0;
 	overflow: auto;
-}
-
-.app-shell {
+		font-size: 0.88rem;
+		font-weight: 600;
 	min-height: 100dvh;
 	display: grid;
 	grid-template-columns: 312px minmax(0, 1fr);
@@ -38,15 +31,17 @@ body {
 }
 
 .sidebar {
-	position: sticky;
-	top: 0;
-	height: 100vh;
+	.think-summary-arrow {
+		font-size: 0.95rem;
+		line-height: 1;
+		min-width: 0.95rem;
+		color: var(--muted);
 	background: var(--panel);
 	border-right: 1px solid var(--border);
 	overflow: hidden auto;
-	z-index: 20;
+		padding: 0.15rem 0 0.15rem 1.35rem;
 }
-
+		font-size: 0.9rem;
 .sidebar-shell {
 	padding: 1rem;
 	display: flex;
@@ -55,49 +50,155 @@ body {
 }
 
 .sidebar-header {
-	display: flex;
-	flex-direction: column;
-	gap: 0.85rem;
-	padding: 0.75rem;
-	background: rgba(255, 255, 255, 0.03);
+	.source-launcher {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.6rem;
+		align-items: center;
+		margin-top: 0.9rem;
 	border: 1px solid var(--border);
 	border-radius: 1.1rem;
-	box-shadow: var(--shadow);
-}
-
-.brand {
-	display: flex;
-	gap: 0.9rem;
+	.source-launcher-label {
+		margin: 0;
+		font-size: 0.82rem;
+		letter-spacing: 0.11em;
+		text-transform: uppercase;
 	align-items: center;
 }
 
-.brand-mark {
-	width: 14px;
-	height: 14px;
-	border-radius: 999px;
-	background: var(--accent);
-	box-shadow: 0 0 0 6px rgba(255, 157, 0, 0.12);
-}
+	.source-launcher-button {
+		border: 1px solid var(--border);
+		background: rgba(255, 255, 255, 0.04);
+		color: var(--text);
+		border-radius: 999px;
+		padding: 0.45rem 0.8rem;
+		font: inherit;
+		font-size: 0.86rem;
+		font-weight: 600;
+		cursor: pointer;
+		transition: transform 120ms ease, background 120ms ease, border-color 120ms ease;
 
 .brand h1,
-.header-copy h1 {
-	margin: 0;
-	font-size: 1rem;
-	letter-spacing: 0.08em;
-	text-transform: uppercase;
-}
-
-.brand p,
+	.source-launcher-button:hover {
+		transform: translateY(-1px);
+		border-color: rgba(255, 157, 0, 0.3);
+		background: rgba(255, 255, 255, 0.06);
 .header-copy p {
 	margin: 0.2rem 0 0;
-	color: var(--muted);
-	font-size: 0.86rem;
-}
-
-.sidebar-section-title h2 {
+	.source-modal {
+		position: fixed;
+		inset: 0;
+		z-index: 60;
+		display: grid;
+		place-items: center;
+		padding: 1rem;
 	margin: 0;
 	font-size: 0.78rem;
-	text-transform: uppercase;
+
+	.source-modal[hidden] {
+		display: none;
+	}
+
+	.source-modal-backdrop {
+		position: absolute;
+		inset: 0;
+		border: 0;
+		background: rgba(3, 8, 12, 0.76);
+		cursor: pointer;
+		padding: 0;
+	}
+
+	.source-modal-dialog {
+		position: relative;
+		z-index: 1;
+		width: min(92vw, 1040px);
+		max-height: 92vh;
+		display: grid;
+		grid-template-rows: auto minmax(0, 1fr) auto;
+		gap: 0.85rem;
+		padding: 1rem;
+		border: 1px solid var(--border);
+		border-radius: 1rem;
+		background: var(--panel);
+		box-shadow: var(--shadow);
+	}
+
+	.source-modal-header {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 0.75rem;
+	}
+
+	.source-modal-titleblock h3 {
+		margin: 0;
+		font-size: 0.95rem;
+		letter-spacing: 0.08em;
+		text-transform: uppercase;
+	}
+
+	.source-modal-counter,
+	.source-modal-caption {
+		margin: 0.15rem 0 0;
+		color: var(--muted);
+		font-size: 0.85rem;
+	}
+
+	.source-modal-close {
+		border: 1px solid var(--border);
+		background: rgba(255, 255, 255, 0.04);
+		color: var(--text);
+		border-radius: 999px;
+		padding: 0.55rem 0.85rem;
+		font: inherit;
+		cursor: pointer;
+	}
+
+	.source-modal-frame {
+		min-height: 0;
+		display: grid;
+		grid-template-columns: auto minmax(0, 1fr) auto;
+		align-items: center;
+		gap: 0.75rem;
+	}
+
+	.source-modal-image {
+		max-width: 100%;
+		max-height: 72vh;
+		width: auto;
+		height: auto;
+		justify-self: center;
+		object-fit: contain;
+		background: #000;
+		border: 1px solid var(--border);
+		border-radius: 0.85rem;
+	}
+
+	.source-modal-nav {
+		width: 2.8rem;
+		height: 2.8rem;
+		border: 1px solid var(--border);
+		border-radius: 999px;
+		background: rgba(255, 255, 255, 0.05);
+		color: var(--text);
+		font: inherit;
+		font-size: 1.4rem;
+		cursor: pointer;
+	}
+
+	.source-modal-nav:disabled {
+		opacity: 0.35;
+		cursor: default;
+	}
+
+	.source-modal-footer {
+		display: flex;
+		justify-content: flex-end;
+		min-height: 1.2rem;
+		color: var(--muted);
+	}
+
+	.composer-shell {
 	letter-spacing: 0.14em;
 	color: var(--muted);
 }
@@ -366,48 +467,6 @@ body {
 	color: var(--text);
 }
 
-.reference-images {
-	margin-top: 1rem;
-	display: grid;
-	gap: 0.75rem;
-	grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-}
-
-.reference-label {
-	grid-column: 1 / -1;
-	margin: 0;
-	font-size: 0.8rem;
-	letter-spacing: 0.12em;
-	text-transform: uppercase;
-	color: var(--muted);
-}
-
-.reference-card {
-	margin: 0;
-	padding: 0.7rem;
-	border: 1px solid var(--border);
-	border-radius: 0.9rem;
-	background: rgba(255, 255, 255, 0.03);
-	box-shadow: var(--shadow);
-}
-
-.reference-card img {
-	width: 100%;
-	height: auto;
-	display: block;
-	border-radius: 0.6rem;
-	border: 1px solid rgba(255, 255, 255, 0.06);
-	object-fit: contain;
-	background: rgba(0, 0, 0, 0.18);
-}
-
-.reference-card figcaption {
-	margin-top: 0.55rem;
-	font-size: 0.8rem;
-	color: var(--muted);
-	word-break: break-word;
-}
-
 .composer-shell {
 	position: fixed;
 	left: 312px;
@@ -599,7 +658,7 @@ body {
 	.session-item,
 	.message,
 	.composer,
-	.reference-card,
+	.source-modal-dialog,
 	.think-paragraph {
 		background: #ffffff;
 	}
@@ -618,8 +677,9 @@ body {
 	.session-preview,
 	.brand p,
 	.header-copy p,
-	.reference-label,
-	.reference-card figcaption,
+	.source-launcher-label,
+	.source-modal-counter,
+	.source-modal-caption,
 	.think-content {
 		color: var(--muted);
 	}
@@ -638,5 +698,19 @@ body {
 
 	.sidebar-backdrop {
 		background: rgba(15, 23, 42, 0.24);
+	}
+
+	.source-modal-dialog {
+		background: #ffffff;
+	}
+
+	.source-modal-backdrop {
+		background: rgba(15, 23, 42, 0.18);
+	}
+
+	.source-modal-close,
+	.source-modal-nav,
+	.source-launcher-button {
+		background: #ffffff;
 	}
 }

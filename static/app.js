@@ -17,7 +17,18 @@ const appState = {
 	activeSessionId: null,
 };
 
-const THINK_LABEL = 'Thought for 70 seconds';
+const THINK_LABEL = 'thinking...';
+
+const sourceViewerState = {
+	images: [],
+	index: 0,
+	modal: null,
+	imageElement: null,
+	captionElement: null,
+	counterElement: null,
+	previousButton: null,
+	nextButton: null,
+};
 
 if (typeof marked !== 'undefined') {
 	marked.setOptions({ gfm: true, breaks: true });
@@ -114,6 +125,175 @@ function createMarkdownContainer(content) {
 	return container;
 }
 
+function ensureSourceViewer() {
+	if (sourceViewerState.modal) {
+		return;
+	}
+
+	const modal = document.createElement('div');
+	modal.className = 'source-modal';
+	modal.hidden = true;
+	modal.setAttribute('role', 'dialog');
+	modal.setAttribute('aria-modal', 'true');
+	modal.setAttribute('aria-label', 'Retrieved Page');
+
+	const backdrop = document.createElement('button');
+	backdrop.type = 'button';
+	backdrop.className = 'source-modal-backdrop';
+	backdrop.setAttribute('aria-label', 'Close source viewer');
+	backdrop.addEventListener('click', closeSourceViewer);
+
+	const dialog = document.createElement('div');
+	dialog.className = 'source-modal-dialog';
+
+	const header = document.createElement('div');
+	header.className = 'source-modal-header';
+
+	const titleBlock = document.createElement('div');
+	titleBlock.className = 'source-modal-titleblock';
+
+	const title = document.createElement('h3');
+	title.textContent = 'Retrieved Page';
+	titleBlock.appendChild(title);
+
+	const counter = document.createElement('p');
+	counter.className = 'source-modal-counter';
+	titleBlock.appendChild(counter);
+
+	header.appendChild(titleBlock);
+
+	const closeButton = document.createElement('button');
+	closeButton.type = 'button';
+	closeButton.className = 'source-modal-close';
+	closeButton.textContent = 'Close';
+	closeButton.addEventListener('click', closeSourceViewer);
+	header.appendChild(closeButton);
+
+	const frame = document.createElement('div');
+	frame.className = 'source-modal-frame';
+
+	const previousButton = document.createElement('button');
+	previousButton.type = 'button';
+	previousButton.className = 'source-modal-nav source-modal-prev';
+	previousButton.textContent = '‹';
+	previousButton.setAttribute('aria-label', 'Previous retrieved page');
+	previousButton.addEventListener('click', () => moveSourceViewer(-1));
+
+	const nextButton = document.createElement('button');
+	nextButton.type = 'button';
+	nextButton.className = 'source-modal-nav source-modal-next';
+	nextButton.textContent = '›';
+	nextButton.setAttribute('aria-label', 'Next retrieved page');
+	nextButton.addEventListener('click', () => moveSourceViewer(1));
+
+	const image = document.createElement('img');
+	image.className = 'source-modal-image';
+	image.alt = 'Retrieved Page';
+
+	frame.appendChild(previousButton);
+	frame.appendChild(image);
+	frame.appendChild(nextButton);
+
+	const footer = document.createElement('div');
+	footer.className = 'source-modal-footer';
+
+	const caption = document.createElement('p');
+	caption.className = 'source-modal-caption';
+	footer.appendChild(caption);
+
+	dialog.appendChild(header);
+	dialog.appendChild(frame);
+	dialog.appendChild(footer);
+
+	modal.appendChild(backdrop);
+	modal.appendChild(dialog);
+	document.body.appendChild(modal);
+
+	sourceViewerState.modal = modal;
+	sourceViewerState.imageElement = image;
+	sourceViewerState.captionElement = caption;
+	sourceViewerState.counterElement = counter;
+	sourceViewerState.previousButton = previousButton;
+	sourceViewerState.nextButton = nextButton;
+
+	document.addEventListener('keydown', (event) => {
+		if (!sourceViewerState.modal || sourceViewerState.modal.hidden) {
+			return;
+		}
+
+		if (event.key === 'Escape') {
+			closeSourceViewer();
+		}
+
+		if (event.key === 'ArrowLeft') {
+			moveSourceViewer(-1);
+		}
+
+		if (event.key === 'ArrowRight') {
+			moveSourceViewer(1);
+		}
+	});
+}
+
+function sourceImageUrl(imageFilename) {
+	return `/static/images/${encodeURIComponent(imageFilename)}`;
+}
+
+function updateSourceViewer() {
+	if (!sourceViewerState.modal || sourceViewerState.images.length === 0) {
+		return;
+	}
+
+	const currentImage = sourceViewerState.images[sourceViewerState.index];
+	sourceViewerState.imageElement.src = sourceImageUrl(currentImage);
+	sourceViewerState.imageElement.alt = 'Retrieved Page';
+	sourceViewerState.captionElement.textContent = `Page ${sourceViewerState.index + 1} of ${sourceViewerState.images.length}`;
+	sourceViewerState.counterElement.textContent = `${sourceViewerState.index + 1} / ${sourceViewerState.images.length}`;
+	sourceViewerState.previousButton.disabled = sourceViewerState.images.length <= 1;
+	sourceViewerState.nextButton.disabled = sourceViewerState.images.length <= 1;
+	if (sourceViewerState.images.length > 1) {
+		sourceViewerState.previousButton.disabled = sourceViewerState.index === 0;
+		sourceViewerState.nextButton.disabled = sourceViewerState.index === sourceViewerState.images.length - 1;
+	}
+}
+
+function openSourceViewer(imageFilenames, startIndex = 0) {
+	ensureSourceViewer();
+	const normalizedImages = imageFilenames.filter(Boolean);
+	if (normalizedImages.length === 0) {
+		return;
+	}
+
+	sourceViewerState.images = normalizedImages;
+	sourceViewerState.index = Math.min(Math.max(startIndex, 0), normalizedImages.length - 1);
+	updateSourceViewer();
+	sourceViewerState.modal.hidden = false;
+}
+
+function closeSourceViewer() {
+	if (!sourceViewerState.modal) {
+		return;
+	}
+
+	sourceViewerState.modal.hidden = true;
+	sourceViewerState.images = [];
+	sourceViewerState.index = 0;
+}
+
+function moveSourceViewer(delta) {
+	if (sourceViewerState.images.length === 0) {
+		return;
+	}
+
+	const nextIndex = sourceViewerState.index + delta;
+	if (nextIndex < 0 || nextIndex >= sourceViewerState.images.length) {
+		return;
+	}
+
+	sourceViewerState.index = nextIndex;
+	updateSourceViewer();
+}
+
 function splitThinkParagraphs(text) {
 	return text
 		.split(/\n\s*\n/)
@@ -121,13 +301,26 @@ function splitThinkParagraphs(text) {
 		.filter(Boolean);
 }
 
-function createThinkParagraphElement(paragraphText, index, isOpen) {
+function createThinkParagraphElement(paragraphText, isOpen = false) {
 	const details = document.createElement('details');
 	details.className = 'think-paragraph';
 	details.open = isOpen;
 
 	const summary = document.createElement('summary');
-	summary.textContent = THINK_LABEL;
+	summary.className = 'think-summary';
+	const arrow = document.createElement('span');
+	arrow.className = 'think-summary-arrow';
+	arrow.textContent = '>';
+	const label = document.createElement('span');
+	label.className = 'think-summary-label';
+	label.textContent = THINK_LABEL;
+	summary.appendChild(arrow);
+	summary.appendChild(label);
+	const syncSummary = () => {
+		arrow.textContent = details.open ? '⌄' : '>';
+	};
+	syncSummary();
+	details.addEventListener('toggle', syncSummary);
 	details.appendChild(summary);
 
 	const content = document.createElement('div');
@@ -147,10 +340,7 @@ function renderThinkThread(text, isComplete) {
 		return thread;
 	}
 
-	for (let index = 0; index < paragraphs.length; index += 1) {
-		const isLast = index === paragraphs.length - 1;
-		thread.appendChild(createThinkParagraphElement(paragraphs[index], index, !isComplete && isLast));
-	}
+	thread.appendChild(createThinkParagraphElement(paragraphs.join('\n\n'), false));
 
 	return thread;
 }
@@ -181,10 +371,6 @@ function appendStreamContainer(parent, isThinkMode) {
 
 function appendAssistantMessage(message, options = {}) {
 	const assistantBubble = createMessageElement('assistant');
-	const answerContainer = document.createElement('div');
-	answerContainer.className = 'assistant-answer';
-	answerContainer.appendChild(createMarkdownContainer(message.content || ''));
-	assistantBubble.appendChild(answerContainer);
 
 	if (message.thinkContent) {
 		const thinkContainer = document.createElement('div');
@@ -193,8 +379,13 @@ function appendAssistantMessage(message, options = {}) {
 		assistantBubble.appendChild(thinkContainer);
 	}
 
+	const answerContainer = document.createElement('div');
+	answerContainer.className = 'assistant-answer';
+	answerContainer.appendChild(createMarkdownContainer(message.content || ''));
+	assistantBubble.appendChild(answerContainer);
+
 	if (Array.isArray(options.imageFilenames) && options.imageFilenames.length > 0) {
-		assistantBubble.appendChild(createReferenceImages(options.imageFilenames));
+		assistantBubble.appendChild(createSourceLauncher(options.imageFilenames));
 	}
 
 	chatHistory.appendChild(assistantBubble);
@@ -202,33 +393,23 @@ function appendAssistantMessage(message, options = {}) {
 	return assistantBubble;
 }
 
-function createReferenceImages(imageFilenames) {
-	const references = document.createElement('div');
-	references.className = 'reference-images';
+function createSourceLauncher(imageFilenames) {
+	const launcher = document.createElement('div');
+	launcher.className = 'source-launcher';
 
 	const label = document.createElement('p');
-	label.className = 'reference-label';
-	label.textContent = 'Retrieved image references';
-	references.appendChild(label);
+	label.className = 'source-launcher-label';
+	label.textContent = 'Retrieved Page';
+	launcher.appendChild(label);
 
-	for (const imageFilename of imageFilenames) {
-		const figure = document.createElement('figure');
-		figure.className = 'reference-card';
+	const button = document.createElement('button');
+	button.type = 'button';
+	button.className = 'source-launcher-button';
+	button.textContent = 'view source';
+	button.addEventListener('click', () => openSourceViewer(imageFilenames));
+	launcher.appendChild(button);
 
-		const image = document.createElement('img');
-		image.src = `/static/images/${imageFilename}`;
-		image.alt = `Retrieved reference ${imageFilename}`;
-		image.loading = 'lazy';
-		figure.appendChild(image);
-
-		const caption = document.createElement('figcaption');
-		caption.textContent = imageFilename;
-		figure.appendChild(caption);
-
-		references.appendChild(figure);
-	}
-
-	return references;
+	return launcher;
 }
 
 function renderSessionList() {
@@ -448,9 +629,16 @@ async function sendMessage(query) {
 
 	const userBubble = appendMessage('user', query);
 	const assistantBubble = createMessageElement('assistant');
+	const thinkContainer = document.createElement('div');
+	thinkContainer.className = 'think-thread';
+	assistantBubble.appendChild(thinkContainer);
 	const answerContainer = document.createElement('div');
 	answerContainer.className = 'assistant-answer';
 	assistantBubble.appendChild(answerContainer);
+	const sourceContainer = document.createElement('div');
+	sourceContainer.className = 'source-launcher';
+	sourceContainer.hidden = true;
+	assistantBubble.appendChild(sourceContainer);
 	chatHistory.appendChild(assistantBubble);
 	scrollToBottom();
 
@@ -501,9 +689,7 @@ async function sendMessage(query) {
 
 			assistantThinkText += content;
 			if (!currentThinkContainer) {
-				currentThinkContainer = document.createElement('div');
-				currentThinkContainer.className = 'think-thread';
-				answerContainer.appendChild(currentThinkContainer);
+				currentThinkContainer = thinkContainer;
 			}
 
 			updateThinkThread(currentThinkContainer, assistantThinkText, false);
@@ -571,7 +757,8 @@ async function sendMessage(query) {
 
 		imageFilenames = [...new Set(retrievedResults.map((result) => result.image_filename).filter(Boolean))];
 		if (imageFilenames.length > 0) {
-			answerContainer.appendChild(createReferenceImages(imageFilenames));
+			sourceContainer.appendChild(createSourceLauncher(imageFilenames));
+			sourceContainer.hidden = false;
 		}
 
 		session.messages.push({
