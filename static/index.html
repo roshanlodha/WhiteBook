@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<meta name="color-scheme" content="light dark" />
+		<title>WhiteBook</title>
+		<script defer src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+		<link rel="stylesheet" href="/static/style.css" />
+		<script defer src="/static/app.js"></script>
+	</head>
+	<body>
+		<div class="app-shell">
+			<aside id="session-sidebar" class="sidebar" aria-label="Chat Sessions">
+				<div class="sidebar-shell">
+					<div class="sidebar-header">
+						<div class="brand">
+							<span class="brand-mark"></span>
+							<div>
+								<h1>WhiteBook</h1>
+								<p>Ultra-low-latency medical RAG</p>
+							</div>
+						</div>
+						<button id="new-session-button" class="secondary-button" type="button">New session</button>
+					</div>
+					<div class="sidebar-section">
+						<div class="sidebar-section-title">
+							<h2>Chat Sessions</h2>
+						</div>
+						<div id="session-list" class="session-list" role="list"></div>
+					</div>
+				</div>
+			</aside>
+
+			<div id="sidebar-backdrop" class="sidebar-backdrop" hidden></div>
+
+			<div class="chat-pane">
+				<header class="app-header">
+					<button id="sidebar-toggle" class="icon-button mobile-only" type="button" aria-label="Open chat sessions">☰</button>
+					<div class="header-copy">
+						<h1>Clinical Assistant</h1>
+						<p>Session-aware retrieval, markdown rendering, and image references</p>
+					</div>
+				</header>
+
+				<main id="chat-history" class="chat-history" aria-live="polite" aria-relevant="additions text"></main>
+
+				<footer class="composer-shell">
+					<form id="chat-form" class="composer" autocomplete="off">
+						<label class="sr-only" for="query-input">Ask a clinical question</label>
+						<textarea
+							id="query-input"
+							name="query"
+							rows="1"
+							placeholder="Ask a medical question..."
+							spellcheck="false"
+						></textarea>
+						<button type="submit" id="send-button">Send</button>
+					</form>
+				</footer>
+			</div>
+		</div>
+	</body>
+</html>

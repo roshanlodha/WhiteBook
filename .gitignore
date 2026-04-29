@@ -2,9 +2,11 @@
 .DS_Store
 */.DS_Store
 WhiteBook.pdf
-ios_images/*
-WhiteBook/WhiteBook/ios_images/*
-WhiteBook/WhiteBook/ios_images/**
+**/ios_images/
+**/ios_images/**
+images/*
+WhiteBook/WhiteBook/images/*
+WhiteBook/WhiteBook/images/**
 *.sqlite*
 *.gguf
 *.json*
