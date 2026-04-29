@@ -39,6 +39,11 @@ function loadStoredSessions() {
 		const storedSessions = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null');
 		if (Array.isArray(storedSessions) && storedSessions.length > 0) {
 			appState.sessions = storedSessions;
+			for (const session of appState.sessions) {
+				if ((!session.title || session.title === 'New session' || session.title === 'New chat') && session.messages.length > 0) {
+					session.title = getSessionTitle(session);
+				}
+			}
 		}
 
 		appState.activeSessionId = localStorage.getItem(ACTIVE_SESSION_KEY);
@@ -57,7 +62,7 @@ function persistSessions() {
 	}
 }
 
-function createSession(title = 'New session') {
+function createSession(title = 'New chat') {
 	const now = Date.now();
 	return {
 		id: crypto.randomUUID(),
@@ -66,6 +71,20 @@ function createSession(title = 'New session') {
 		updatedAt: now,
 		messages: [],
 	};
+}
+
+function getSessionTitle(session) {
+	if (session.title && session.title !== 'New session' && session.title !== 'New chat') {
+		return session.title;
+	}
+
+	const firstUserMessage = session.messages.find((message) => message.role === 'user' && message.content.trim().length > 0);
+	if (firstUserMessage) {
+		const trimmed = firstUserMessage.content.trim();
+		return trimmed.length > 42 ? `${trimmed.slice(0, 42).trim()}…` : trimmed;
+	}
+
+	return 'New chat';
 }
 
 function ensureSessionState() {
@@ -102,7 +121,7 @@ function updateSessionTimestamp(session) {
 }
 
 function updateSessionTitle(session, query) {
-	if (!session.title || session.title === 'New session' || session.messages.length <= 1) {
+	if (session.messages.filter((message) => message.role === 'user').length === 1) {
 		const trimmed = query.trim();
 		session.title = trimmed.length > 42 ? `${trimmed.slice(0, 42).trim()}…` : trimmed;
 	}
@@ -417,23 +436,34 @@ function renderSessionList() {
 	const orderedSessions = [...appState.sessions].sort((left, right) => right.updatedAt - left.updatedAt);
 
 	for (const session of orderedSessions) {
+		const item = document.createElement('div');
+		item.className = `session-item ${session.id === appState.activeSessionId ? 'active' : ''}`;
+		item.setAttribute('role', 'listitem');
+
 		const button = document.createElement('button');
 		button.type = 'button';
-		button.className = `session-item ${session.id === appState.activeSessionId ? 'active' : ''}`;
-		button.setAttribute('role', 'listitem');
+		button.className = 'session-item-button';
 
 		const title = document.createElement('span');
 		title.className = 'session-title';
-		title.textContent = session.title || 'New session';
+		title.textContent = getSessionTitle(session);
 		button.appendChild(title);
 
-		const preview = document.createElement('span');
-		preview.className = 'session-preview';
-		preview.textContent = getSessionPreview(session);
-		button.appendChild(preview);
-
 		button.addEventListener('click', () => switchSession(session.id));
-		sessionList.appendChild(button);
+		item.appendChild(button);
+
+		const deleteButton = document.createElement('button');
+		deleteButton.type = 'button';
+		deleteButton.className = 'session-delete-button';
+		deleteButton.setAttribute('aria-label', `Delete ${getSessionTitle(session)}`);
+		deleteButton.textContent = '×';
+		deleteButton.addEventListener('click', (event) => {
+			event.stopPropagation();
+			deleteSession(session.id);
+		});
+		item.appendChild(deleteButton);
+
+		sessionList.appendChild(item);
 	}
 }
 
@@ -449,9 +479,17 @@ function renderSessionMessages(session) {
 	}
 
 	if (session.messages.length === 0) {
-		const emptyState = document.createElement('div');
-		emptyState.className = 'message system empty-state';
-		emptyState.textContent = 'Start a session by asking a clinical question.';
+		const emptyState = document.createElement('section');
+		emptyState.className = 'empty-chat';
+
+		const title = document.createElement('h2');
+		title.textContent = 'New chat';
+		emptyState.appendChild(title);
+
+		const body = document.createElement('p');
+		body.textContent = 'Ask a question to start the conversation.';
+		emptyState.appendChild(body);
+
 		chatHistory.appendChild(emptyState);
 	}
 
@@ -488,6 +526,30 @@ function createNewSession() {
 	persistSessions();
 	renderSessionList();
 	renderSessionMessages(session);
+	closeSidebar();
+}
+
+function deleteSession(sessionId) {
+	const sessionIndex = appState.sessions.findIndex((session) => session.id === sessionId);
+	if (sessionIndex === -1) {
+		return;
+	}
+
+	const wasActive = appState.activeSessionId === sessionId;
+	appState.sessions.splice(sessionIndex, 1);
+
+	if (appState.sessions.length === 0) {
+		createNewSession();
+		return;
+	}
+
+	if (wasActive) {
+		appState.activeSessionId = appState.sessions[0].id;
+	}
+
+	persistSessions();
+	renderSessionList();
+	renderSessionMessages(getActiveSession());
 	closeSidebar();
 }
 
