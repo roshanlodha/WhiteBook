@@ -430,7 +430,7 @@ function createSourceLauncher(imageFilenames) {
 	const button = document.createElement('button');
 	button.type = 'button';
 	button.className = 'source-launcher-button';
-	button.textContent = 'view source';
+	button.textContent = 'View Source(s)';
 	button.addEventListener('click', () => openSourceViewer(imageFilenames));
 	launcher.appendChild(button);
 

@@ -7,6 +7,7 @@
 		<title>WhiteBook</title>
 		<script defer src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 		<link rel="stylesheet" href="/static/style.css" />
+		<link rel="stylesheet" href="/static/mobile.css" />
 		<script defer src="/static/app.js"></script>
 	</head>
 	<body>
@@ -24,7 +25,12 @@
 
 			<div class="chat-pane">
 				<header class="app-header">
-					<button id="sidebar-toggle" class="icon-button mobile-only" type="button" aria-label="Open chat sessions">☰</button>
+					<button id="sidebar-toggle" class="icon-button mobile-only" type="button" aria-label="Open chat sessions">
+						<span class="menu-line"></span>
+						<span class="menu-line"></span>
+						<span class="menu-line"></span>
+					</button>
+					<h1 class="app-title mobile-only">WhiteBook</h1>
 				</header>
 
 				<main id="chat-history" class="chat-history" aria-live="polite" aria-relevant="additions text"></main>
