@@ -144,6 +144,13 @@ function createMarkdownContainer(content) {
 	return container;
 }
 
+function clearEmptyState() {
+	const emptyState = chatHistory.querySelector('.empty-chat');
+	if (emptyState) {
+		emptyState.remove();
+	}
+}
+
 function ensureSourceViewer() {
 	if (sourceViewerState.modal) {
 		return;
@@ -205,12 +212,16 @@ function ensureSourceViewer() {
 	nextButton.setAttribute('aria-label', 'Next retrieved page');
 	nextButton.addEventListener('click', () => moveSourceViewer(1));
 
+	const stage = document.createElement('div');
+	stage.className = 'source-modal-stage';
+
 	const image = document.createElement('img');
 	image.className = 'source-modal-image';
 	image.alt = 'Retrieved Page';
 
 	frame.appendChild(previousButton);
-	frame.appendChild(image);
+	stage.appendChild(image);
+	frame.appendChild(stage);
 	frame.appendChild(nextButton);
 
 	const footer = document.createElement('div');
@@ -359,7 +370,7 @@ function renderThinkThread(text, isComplete) {
 		return thread;
 	}
 
-	thread.appendChild(createThinkParagraphElement(paragraphs.join('\n\n'), false));
+	thread.appendChild(createThinkParagraphElement(paragraphs.join('\n\n'), !isComplete));
 
 	return thread;
 }
@@ -683,6 +694,7 @@ async function sendMessage(query) {
 	updateSessionTimestamp(session);
 	persistSessions();
 	renderSessionList();
+	clearEmptyState();
 
 	const userBubble = appendMessage('user', query);
 	const assistantBubble = createMessageElement('assistant');
@@ -727,6 +739,14 @@ async function sendMessage(query) {
 		let buffer = '';
 		const parserState = { inThinkMode: false, buffer: '' };
 
+		const refreshThinkDisplay = (isComplete = false) => {
+			if (!currentThinkContainer) {
+				currentThinkContainer = thinkContainer;
+			}
+
+			updateThinkThread(currentThinkContainer, assistantThinkText, isComplete);
+		};
+
 		const appendToBlock = (mode, content) => {
 			if (!content) {
 				return;
@@ -745,17 +765,17 @@ async function sendMessage(query) {
 			}
 
 			assistantThinkText += content;
-			if (!currentThinkContainer) {
-				currentThinkContainer = thinkContainer;
-			}
-
-			updateThinkThread(currentThinkContainer, assistantThinkText, false);
+			refreshThinkDisplay(false);
 		};
 
 		const processText = (text) => {
+			const wasInThinkMode = parserState.inThinkMode;
 			const segments = splitThinkTags(text, parserState);
 			for (const segment of segments) {
 				appendToBlock(segment.mode, segment.content);
+			}
+			if (wasInThinkMode && !parserState.inThinkMode && assistantThinkText.trim().length > 0) {
+				refreshThinkDisplay(true);
 			}
 		};
 
@@ -810,6 +830,10 @@ async function sendMessage(query) {
 			}
 
 			currentMarkdownContainer.innerHTML = typeof marked !== 'undefined' ? marked.parse(assistantFinalAnswer) : assistantFinalAnswer;
+		}
+
+		if (assistantThinkText.trim().length > 0) {
+			refreshThinkDisplay(true);
 		}
 
 		imageFilenames = [...new Set(retrievedResults.map((result) => result.image_filename).filter(Boolean))];

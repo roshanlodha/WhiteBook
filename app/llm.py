@@ -30,26 +30,16 @@ class Generator:
 		history: list[dict[str, Any]],
 	) -> AsyncGenerator[str, None]:
 		system_prompt = (
-			"You are an elite emergency medicine assistant. Answer the clinical query strictly using ONLY the provided context chunks. "
-			"Do not use outside knowledge. If the answer is not in the context, say you don't know. "
-			"If the context relies on a visual diagram, explicitly state the user should reference the attached image."
+			"You are a expert medical text interpreter, not a medical expert. Answer only from the provided context. Be direct, concise, and clinically useful. Do not add filler, hedging, or meta commentary. If the answer is not in the context, simply state so. In your response, never mention pages, chunk numbers, filenames, scores, retrieval metadata, or that images or attachments were provided. Give the answer itself, not instructions about the source. Be concise, direct, and clinically useful. Do not make up any language not in the source text. It is ok to repeat the source verbatim if it answers the user's query."
 		)
 
 		context_parts: list[str] = []
 		for index, chunk in enumerate(retrieved_context, start=1):
 			heading = chunk.get("heading_context") or ""
 			text = chunk.get("text_content") or ""
-			page_start = chunk.get("page_start")
-			page_end = chunk.get("page_end")
-			image_filename = chunk.get("image_filename") or "None"
-			score = chunk.get("score")
-			page_text = f"{page_start}" if page_end in (None, page_start) else f"{page_start}-{page_end}"
 			context_parts.append(
 				f"--- Chunk {index} ---\n"
 				f"Heading: {heading}\n"
-				f"Page: {page_text}\n"
-				f"Image: {image_filename}\n"
-				f"Score: {score}\n"
 				f"Text: {text}"
 			)
 
