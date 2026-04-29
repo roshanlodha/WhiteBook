@@ -11,7 +11,7 @@ const chatHistory = document.getElementById('chat-history');
 const chatForm = document.getElementById('chat-form');
 const chatInput = document.getElementById('chat-input');
 let isToolsModeActive = false;
-let isThinkingModeActive = true;
+let isThinkingModeActive = false;
 
 document.getElementById('tools-toggle').addEventListener('change', (e) => {
 	isToolsModeActive = e.target.checked;
@@ -33,6 +33,7 @@ const appState = {
 };
 
 const THINK_LABEL = 'thinking...';
+const TOOL_LABEL = 'calculating...';
 
 const sourceViewerState = {
 	images: [],
@@ -339,16 +340,9 @@ function moveSourceViewer(delta) {
 	updateSourceViewer();
 }
 
-function splitThinkParagraphs(text) {
-	return text
-		.split(/\n\s*\n/)
-		.map((paragraph) => paragraph.trim())
-		.filter(Boolean);
-}
-
-function createThinkParagraphElement(paragraphText, isOpen = false) {
+function createCollapsibleElement(paragraphText, labelText, isOpen = false) {
 	const details = document.createElement('details');
-	details.className = 'think-paragraph';
+	details.className = 'think-paragraph'; // Reuse class for styling
 	details.open = isOpen;
 
 	const summary = document.createElement('summary');
@@ -358,7 +352,7 @@ function createThinkParagraphElement(paragraphText, isOpen = false) {
 	arrow.textContent = '>';
 	const label = document.createElement('span');
 	label.className = 'think-summary-label';
-	label.textContent = THINK_LABEL;
+	label.textContent = labelText;
 	summary.appendChild(arrow);
 	summary.appendChild(label);
 	const syncSummary = () => {
@@ -376,22 +370,21 @@ function createThinkParagraphElement(paragraphText, isOpen = false) {
 	return details;
 }
 
-function renderThinkThread(text, isComplete) {
+function renderCollapsibleThread(text, labelText, isComplete) {
 	const thread = document.createElement('div');
 	thread.className = 'think-block';
 
-	const paragraphs = splitThinkParagraphs(text);
-	if (paragraphs.length === 0) {
+	if (text.trim().length === 0) {
 		return thread;
 	}
 
-	thread.appendChild(createThinkParagraphElement(paragraphs.join('\n\n'), !isComplete));
+	thread.appendChild(createCollapsibleElement(text.trim(), labelText, !isComplete));
 
 	return thread;
 }
 
-function updateThinkThread(container, text, isComplete) {
-	container.replaceChildren(renderThinkThread(text, isComplete));
+function updateCollapsibleThread(container, text, labelText, isComplete) {
+	container.replaceChildren(renderCollapsibleThread(text, labelText, isComplete));
 	if (text.trim().length === 0) {
 		container.hidden = true;
 	} else {
@@ -420,8 +413,17 @@ function appendAssistantMessage(message, options = {}) {
 	if (message.thinkContent) {
 		const thinkContainer = document.createElement('div');
 		thinkContainer.className = 'think-block';
-		updateThinkThread(thinkContainer, message.thinkContent, true);
+		updateCollapsibleThread(thinkContainer, message.thinkContent, THINK_LABEL, true);
 		assistantBubble.appendChild(thinkContainer);
+	}
+
+	if (Array.isArray(message.toolResults)) {
+		for (const result of message.toolResults) {
+			const toolContainer = document.createElement('div');
+			toolContainer.className = 'think-block';
+			updateCollapsibleThread(toolContainer, result, TOOL_LABEL, true);
+			assistantBubble.appendChild(toolContainer);
+		}
 	}
 
 	const answerContainer = document.createElement('div');
@@ -615,18 +617,13 @@ function parseSSEChunk(buffer) {
 	return { events, remaining };
 }
 
-function splitThinkTags(text, state) {
+function splitSpecialTags(text, state) {
 	const segments = [];
-	const openTag = '<think>';
-	const closeTag = '</think>';
+	const tags = [
+		{ name: 'think', open: '<think>', close: '</think>' },
+		{ name: 'tool', open: '<tool_result>', close: '</tool_result>' },
+	];
 	let buffer = (state.buffer || '') + text;
-	let inThinkMode = state.inThinkMode;
-
-	const pushSegment = (mode, content) => {
-		if (content.length > 0) {
-			segments.push({ mode, content });
-		}
-	};
 
 	const suffixPrefixLength = (value, marker) => {
 		const maxLength = Math.min(value.length, marker.length - 1);
@@ -635,42 +632,61 @@ function splitThinkTags(text, state) {
 				return length;
 			}
 		}
-
 		return 0;
 	};
 
 	while (buffer.length > 0) {
-		if (!inThinkMode) {
-			const openIndex = buffer.indexOf(openTag);
-			if (openIndex === -1) {
-				const carryLength = suffixPrefixLength(buffer, openTag);
-				const emit = buffer.slice(0, buffer.length - carryLength);
-				pushSegment('answer', emit);
-				buffer = buffer.slice(buffer.length - carryLength);
+		if (!state.activeTag) {
+			// Find the earliest open tag
+			let earliestOpen = -1;
+			let activeTagObj = null;
+
+			for (const tag of tags) {
+				const index = buffer.indexOf(tag.open);
+				if (index !== -1 && (earliestOpen === -1 || index < earliestOpen)) {
+					earliestOpen = index;
+					activeTagObj = tag;
+				}
+			}
+
+			if (!activeTagObj) {
+				// Check for partial open tags at the end of buffer
+				let maxCarry = 0;
+				for (const tag of tags) {
+					maxCarry = Math.max(maxCarry, suffixPrefixLength(buffer, tag.open));
+				}
+				const emit = buffer.slice(0, buffer.length - maxCarry);
+				if (emit.length > 0) segments.push({ mode: 'answer', content: emit });
+				buffer = buffer.slice(buffer.length - maxCarry);
 				break;
 			}
 
-			pushSegment('answer', buffer.slice(0, openIndex));
-			buffer = buffer.slice(openIndex + openTag.length);
-			inThinkMode = true;
+			// Emit text before the tag
+			if (earliestOpen > 0) {
+				segments.push({ mode: 'answer', content: buffer.slice(0, earliestOpen) });
+			}
+			buffer = buffer.slice(earliestOpen + activeTagObj.open.length);
+			state.activeTag = activeTagObj.name;
 			continue;
 		}
 
-		const closeIndex = buffer.indexOf(closeTag);
+		// Currently inside a tag
+		const tagObj = tags.find((t) => t.name === state.activeTag);
+		const closeIndex = buffer.indexOf(tagObj.close);
+
 		if (closeIndex === -1) {
-			const carryLength = suffixPrefixLength(buffer, closeTag);
+			const carryLength = suffixPrefixLength(buffer, tagObj.close);
 			const emit = buffer.slice(0, buffer.length - carryLength);
-			pushSegment('think', emit);
+			if (emit.length > 0) segments.push({ mode: state.activeTag, content: emit });
 			buffer = buffer.slice(buffer.length - carryLength);
 			break;
 		}
 
-		pushSegment('think', buffer.slice(0, closeIndex));
-		buffer = buffer.slice(closeIndex + closeTag.length);
-		inThinkMode = false;
+		segments.push({ mode: state.activeTag, content: buffer.slice(0, closeIndex) });
+		buffer = buffer.slice(closeIndex + tagObj.close.length);
+		state.activeTag = null;
 	}
 
-	state.inThinkMode = inThinkMode;
 	state.buffer = buffer;
 	return segments;
 }
@@ -713,24 +729,19 @@ async function sendMessage(query) {
 
 	const userBubble = appendMessage('user', query);
 	const assistantBubble = createMessageElement('assistant');
-	const thinkContainer = document.createElement('div');
-	thinkContainer.className = 'think-block';
-	assistantBubble.appendChild(thinkContainer);
 	const answerContainer = document.createElement('div');
 	answerContainer.className = 'assistant-answer';
 	assistantBubble.appendChild(answerContainer);
-	const sourceContainer = document.createElement('div');
-	sourceContainer.className = 'source-launcher';
-	sourceContainer.hidden = true;
-	assistantBubble.appendChild(sourceContainer);
 	chatHistory.appendChild(assistantBubble);
 	scrollToBottom();
 
 	let retrievedResults = [];
 	let assistantFinalAnswer = '';
 	let assistantThinkText = '';
+	let assistantToolResults = [];
 	let currentMarkdownContainer = null;
 	let currentThinkContainer = null;
+	let currentToolContainer = null;
 	let imageFilenames = [];
 
 	try {
@@ -754,18 +765,10 @@ async function sendMessage(query) {
 		const reader = response.body.getReader();
 		const decoder = new TextDecoder();
 		let buffer = '';
-		const parserState = { inThinkMode: false, buffer: '' };
+		const parserState = { activeTag: null, buffer: '' };
 
-		const refreshThinkDisplay = (isComplete = false) => {
-			if (!currentThinkContainer) {
-				currentThinkContainer = thinkContainer;
-			}
-
-			updateThinkThread(currentThinkContainer, assistantThinkText, isComplete);
-		};
-
-		const appendToBlock = (mode, content) => {
-			if (!content) {
+		const appendToBlock = (mode, content, isComplete = false) => {
+			if (!content && !isComplete) {
 				return;
 			}
 
@@ -776,23 +779,47 @@ async function sendMessage(query) {
 					currentMarkdownContainer.className = 'markdown-body streaming';
 					answerContainer.appendChild(currentMarkdownContainer);
 				}
-
 				currentMarkdownContainer.textContent = assistantFinalAnswer;
 				return;
 			}
 
-			assistantThinkText += content;
-			refreshThinkDisplay(false);
+			if (mode === 'think') {
+				assistantThinkText += content;
+				if (!currentThinkContainer) {
+					currentThinkContainer = document.createElement('div');
+					currentThinkContainer.className = 'think-block';
+					assistantBubble.insertBefore(currentThinkContainer, answerContainer);
+				}
+				updateCollapsibleThread(currentThinkContainer, assistantThinkText, THINK_LABEL, isComplete);
+				if (isComplete) currentThinkContainer = null;
+				return;
+			}
+
+			if (mode === 'tool') {
+				const currentResultIndex = assistantToolResults.length > 0 ? assistantToolResults.length - 1 : 0;
+				if (assistantToolResults.length === 0) assistantToolResults.push('');
+				
+				assistantToolResults[currentResultIndex] = (assistantToolResults[currentResultIndex] || '') + content;
+				
+				if (!currentToolContainer) {
+					currentToolContainer = document.createElement('div');
+					currentToolContainer.className = 'think-block';
+					assistantBubble.insertBefore(currentToolContainer, answerContainer);
+				}
+				updateCollapsibleThread(currentToolContainer, assistantToolResults[currentResultIndex], TOOL_LABEL, isComplete);
+				
+				if (isComplete) {
+					currentToolContainer = null;
+					assistantToolResults.push('');
+				}
+			}
 		};
 
 		const processText = (text) => {
-			const wasInThinkMode = parserState.inThinkMode;
-			const segments = splitThinkTags(text, parserState);
+			const segments = splitSpecialTags(text, parserState);
 			for (const segment of segments) {
-				appendToBlock(segment.mode, segment.content);
-			}
-			if (wasInThinkMode && !parserState.inThinkMode && assistantThinkText.trim().length > 0) {
-				refreshThinkDisplay(true);
+				const isComplete = !parserState.activeTag && (segment.mode === 'think' || segment.mode === 'tool');
+				appendToBlock(segment.mode, segment.content, isComplete);
 			}
 		};
 
@@ -850,19 +877,24 @@ async function sendMessage(query) {
 		}
 
 		if (assistantThinkText.trim().length > 0) {
-			refreshThinkDisplay(true);
+			if (currentThinkContainer) {
+				updateCollapsibleThread(currentThinkContainer, assistantThinkText, THINK_LABEL, true);
+			}
 		}
 
 		imageFilenames = [...new Set(retrievedResults.map((result) => result.image_filename).filter(Boolean))];
 		if (imageFilenames.length > 0) {
+			const sourceContainer = document.createElement('div');
+			sourceContainer.className = 'source-launcher';
 			sourceContainer.appendChild(createSourceLauncher(imageFilenames));
-			sourceContainer.hidden = false;
+			assistantBubble.appendChild(sourceContainer);
 		}
 
 		session.messages.push({
 			role: 'assistant',
 			content: assistantFinalAnswer.trim(),
 			thinkContent: assistantThinkText.trim() || undefined,
+			toolResults: assistantToolResults.filter(r => r.trim().length > 0),
 			imageFilenames,
 		});
 		updateSessionTimestamp(session);

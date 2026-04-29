@@ -43,7 +43,7 @@ class Generator:
         self.llm = Llama(
             model_path=str(self.model_path),
             n_gpu_layers=-1,
-            n_ctx=8192,
+            n_ctx=16384,
             verbose=False,
         )
 
@@ -101,7 +101,7 @@ class Generator:
             context_string = "" # Bypass RAG completely
 
         user_prompt = f"Context:\n{context_string}\n\nQuestion:{query}" if context_string else query
-        if thinking_mode or tools_mode:
+        if thinking_mode:
             user_prompt += "\n\n/think"
         else:
             user_prompt += "\n\n/no_think"
@@ -207,7 +207,25 @@ class Generator:
                 except Exception as e:
                     result = {"error": str(e)}
 
-                yield f"\n> **Result:** {result}\n\n"
+                # Format result for readability
+                display_result = result
+                if isinstance(result, dict):
+                    if "error" in result:
+                        display_result = f"Error: {result['error']}"
+                    elif "result" in result:
+                        display_result = str(result["result"])
+                    elif "loading_dose_mg" in result:
+                        display_result = f"Loading Dose: {result['loading_dose_mg']} mg (Max: {result['max_dose_mg']} mg)"
+                    elif "mean_arterial_pressure" in result:
+                        display_result = f"MAP: {result['mean_arterial_pressure']} mmHg"
+                    elif "maintenance_rate_ml_hr" in result:
+                        display_result = f"Maintenance Rate: {result['maintenance_rate_ml_hr']} mL/hr"
+                    elif "wells_score" in result:
+                        display_result = f"Wells Score: {result['wells_score']} ({result['probability']} probability)"
+                    else:
+                        display_result = ", ".join(f"{k}: {v}" for k, v in result.items())
+
+                yield f"<tool_result>{display_result}</tool_result>"
 
                 messages.append({
                     "role": "tool",
