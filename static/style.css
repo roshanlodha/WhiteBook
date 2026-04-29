@@ -23,6 +23,7 @@ body {
 	font-family: var(--font);
 	background: var(--bg);
 	color: var(--text);
+	overflow: hidden;
 }
 
 button,
@@ -32,24 +33,54 @@ textarea {
 
 .app-shell {
 	min-height: 100dvh;
+	height: 100dvh;
 	display: grid;
 	grid-template-columns: 280px minmax(0, 1fr);
 	background: var(--bg);
+	overflow: hidden;
 }
 
 .sidebar {
 	border-right: 1px solid var(--border);
 	background: var(--panel);
-	overflow: auto;
+	overflow: hidden;
 }
 
 .sidebar-shell {
+	height: 100%;
 	padding: 1rem;
+	display: flex;
+	flex-direction: column;
+	min-height: 0;
+	overflow: auto;
+	scrollbar-width: none;
+}
+
+.sidebar-shell:hover {
+	scrollbar-width: thin;
+	scrollbar-color: #e0e0e0 transparent;
+}
+
+.sidebar-shell::-webkit-scrollbar {
+	width: 4px;
+	background: transparent;
+}
+
+.sidebar-shell::-webkit-scrollbar-track {
+	background: transparent;
+}
+
+.sidebar-shell::-webkit-scrollbar-thumb {
+	background: #e0e0e0;
+	border-radius: 2px;
 }
 
 .sidebar-section {
-	display: grid;
+	flex: 1;
+	display: flex;
+	flex-direction: column;
 	gap: 0.75rem;
+	min-height: 0;
 }
 
 .secondary-button,
@@ -74,7 +105,8 @@ textarea {
 }
 
 .session-list {
-	display: grid;
+	display: flex;
+	flex-direction: column;
 	gap: 0.35rem;
 }
 
@@ -85,12 +117,13 @@ textarea {
 	gap: 0.5rem;
 	padding: 0;
 	border: 1px solid transparent;
-	border-radius: 0.75rem;
+	border-radius: 0;
 }
 
 .session-item.active {
-	border-color: var(--border);
-	background: #f9fafb;
+	border-left-color: #1a1a1a;
+	border-left-width: 3px;
+	background: transparent;
 }
 
 .session-item-button {
@@ -98,9 +131,9 @@ textarea {
 	min-width: 0;
 	display: block;
 	width: 100%;
-	padding: 0.7rem 0.8rem;
+	padding: 0.65rem 0.8rem 0.65rem 0.85rem;
 	border: 0;
-	border-radius: 0.75rem;
+	border-radius: 0;
 	text-align: left;
 	background: transparent;
 }
@@ -110,18 +143,39 @@ textarea {
 	white-space: nowrap;
 	overflow: hidden;
 	text-overflow: ellipsis;
-	font-size: 0.95rem;
-	font-weight: 600;
+	font-size: 0.875rem;
+	font-weight: 500;
 }
 
 .session-delete-button {
 	width: 2rem;
 	height: 2rem;
 	margin-right: 0.45rem;
-	border-radius: 999px;
-	color: var(--muted);
-	font-size: 1.1rem;
-	line-height: 1;
+	padding: 0;
+	border: 0;
+	border-radius: 0;
+	background: transparent;
+	color: #ccc;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	opacity: 0;
+	transition: opacity 120ms ease, color 120ms ease;
+}
+
+.session-delete-button svg {
+	width: 16px;
+	height: 16px;
+	fill: currentColor;
+}
+
+.session-item:hover .session-delete-button,
+.session-item:focus-within .session-delete-button {
+	opacity: 1;
+}
+
+.session-delete-button:hover {
+	color: #ff4444;
 }
 
 .chat-pane {
@@ -129,6 +183,8 @@ textarea {
 	flex-direction: column;
 	min-width: 0;
 	min-height: 100dvh;
+	height: 100dvh;
+	overflow: hidden;
 }
 
 .app-header {
@@ -155,14 +211,41 @@ textarea {
 .chat-history {
 	flex: 1;
 	width: 100%;
-	max-width: 860px;
+	max-width: 720px;
 	margin: 0 auto;
-	padding: 2rem 1rem 10rem;
+	padding: 48px 1rem 100px;
 	overflow: auto;
+	scrollbar-width: none;
+	position: relative;
+}
+
+.chat-history:hover {
+	scrollbar-width: thin;
+	scrollbar-color: #e0e0e0 transparent;
+}
+
+.chat-history::-webkit-scrollbar {
+	width: 4px;
+	height: 4px;
+	background: transparent;
+	opacity: 0;
+}
+
+.chat-history:hover::-webkit-scrollbar {
+	opacity: 1;
+}
+
+.chat-history::-webkit-scrollbar-track {
+	background: transparent;
+}
+
+.chat-history::-webkit-scrollbar-thumb {
+	background: #e0e0e0;
+	border-radius: 2px;
 }
 
 .empty-chat {
-	min-height: calc(100dvh - 11rem);
+	min-height: calc(100dvh - 12rem);
 	display: grid;
 	place-content: center;
 	text-align: center;
@@ -184,12 +267,13 @@ textarea {
 }
 
 .message {
-	max-width: 72ch;
-	margin: 0 0 1rem;
+	max-width: 680px;
+	margin: 0 0 32px;
 	padding: 0;
 	white-space: pre-wrap;
 	word-break: break-word;
-	line-height: 1.6;
+	line-height: 1.75;
+	font-size: 15px;
 }
 
 .message.user,
@@ -202,15 +286,22 @@ textarea {
 
 .message.user {
 	margin-left: auto;
-	padding: 0.85rem 1rem;
-	border: 1px solid var(--border);
-	border-radius: 1rem;
-	max-width: 70%;
+	padding: 0;
+	border-radius: 0;
+	max-width: 680px;
+	text-align: right;
+	font-size: 15px;
+	font-weight: 500;
+	color: #1a1a1a;
 }
 
 .message.assistant {
 	margin-right: auto;
 	padding: 0;
+	max-width: 680px;
+	font-size: 15px;
+	line-height: 1.75;
+	color: #2c2c2c;
 }
 
 .message.system {
@@ -225,7 +316,9 @@ textarea {
 }
 
 .markdown-body {
-	line-height: 1.65;
+	line-height: 1.75;
+	font-size: 15px;
+	color: #2c2c2c;
 }
 
 .markdown-body :is(p, ul, ol, blockquote, pre, table) {
@@ -275,6 +368,7 @@ textarea {
 	gap: 0.4rem;
 	cursor: pointer;
 	user-select: none;
+	list-style: none;
 }
 
 .think-paragraph summary::-webkit-details-marker,
@@ -299,17 +393,21 @@ textarea {
 	margin-top: 0.75rem;
 }
 
-.source-launcher-label {
-	margin: 0;
-	color: var(--muted);
-	font-size: 0.8rem;
+.source-launcher-button {
+	padding: 4px 12px;
+	border: 1.5px solid #e0e0e0;
+	border-radius: 6px;
+	background: transparent;
+	font-size: 11px;
+	font-weight: 600;
+	letter-spacing: 0.06em;
 	text-transform: uppercase;
-	letter-spacing: 0.08em;
+	color: #888;
 }
 
-.source-launcher-button {
-	padding: 0.35rem 0.7rem;
-	border-radius: 999px;
+.source-launcher-button:hover {
+	border-color: #999;
+	color: #444;
 }
 
 .source-modal {
@@ -416,47 +514,57 @@ textarea {
 	left: 280px;
 	right: 0;
 	bottom: 0;
-	padding: 1rem;
-	border-top: 1px solid var(--border);
-	background: rgba(255, 255, 255, 0.96);
+	padding: 0;
+	border-top: 1.5px solid #ebebeb;
+	background: #fff;
 }
 
 .composer {
-	max-width: 860px;
+	max-width: 720px;
 	margin: 0 auto;
 	display: flex;
 	align-items: center;
 	gap: 0.75rem;
-	padding: 0.75rem;
-	border: 1px solid var(--border);
-	border-radius: 1rem;
+	height: 56px;
+	padding: 0 1rem;
+	border: 0;
+	border-radius: 0;
 	background: #fff;
+	box-shadow: none;
 }
 
 .composer textarea {
 	flex: 1;
-	min-height: 52px;
+	height: 56px;
+	min-height: 56px;
 	max-height: 220px;
+	padding: 16px 0 0;
 	resize: none;
 	border: 0;
 	outline: none;
 	background: transparent;
 	color: var(--text);
+	font-size: 15px;
 	line-height: 1.5;
 }
 
 .composer textarea::placeholder {
-	color: var(--muted);
+	color: #bbb;
 }
 
 #send-button {
-	width: 2.6rem;
-	height: 2.6rem;
+	width: auto;
+	height: auto;
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
 	padding: 0;
-	border-radius: 999px;
+	border: 0;
+	border-radius: 0;
+	background: transparent;
+	font-size: 20px;
+	line-height: 1;
+	color: #1a1a1a;
 	flex: 0 0 auto;
 }
 

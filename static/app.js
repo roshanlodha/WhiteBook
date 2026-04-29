@@ -416,11 +416,6 @@ function createSourceLauncher(imageFilenames) {
 	const launcher = document.createElement('div');
 	launcher.className = 'source-launcher';
 
-	const label = document.createElement('p');
-	label.className = 'source-launcher-label';
-	label.textContent = 'Retrieved Page';
-	launcher.appendChild(label);
-
 	const button = document.createElement('button');
 	button.type = 'button';
 	button.className = 'source-launcher-button';
@@ -456,7 +451,7 @@ function renderSessionList() {
 		deleteButton.type = 'button';
 		deleteButton.className = 'session-delete-button';
 		deleteButton.setAttribute('aria-label', `Delete ${getSessionTitle(session)}`);
-		deleteButton.textContent = '×';
+		deleteButton.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M9 3.75h6l.75 1.5H21v1.5h-1.5l-.9 11.2A2.25 2.25 0 0 1 16.35 20H7.65a2.25 2.25 0 0 1-2.25-2.05L4.5 6.75H3V5.25h5.25L9 3.75Zm1.5 3v9h1.5v-9h-1.5Zm3 0v9H15v-9h-1.5Z"></path></svg>';
 		deleteButton.addEventListener('click', (event) => {
 			event.stopPropagation();
 			deleteSession(session.id);
