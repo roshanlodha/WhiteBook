@@ -2,16 +2,10 @@
 .DS_Store
 */.DS_Store
 WhiteBook.pdf
-**/ios_images/
-**/ios_images/**
 images/*
-WhiteBook/WhiteBook/images/*
-WhiteBook/WhiteBook/images/**
 *.sqlite*
 *.gguf
 *.json*
-WhiteBookEmbedder.mlpackage
-*.zip
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
