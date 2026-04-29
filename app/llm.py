@@ -14,40 +14,6 @@ AVAILABLE_TOOLS = [
     {
         "type": "function",
         "function": {
-            "name": "calculate_procainamide_dose",
-            "description": "Calculates the procainamide loading dose based on patient weight (15mg/kg, max 1000mg).",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "weight_kg": {
-                        "type": "number",
-                        "description": "The patient's weight in kilograms.",
-                    }
-                },
-                "required": ["weight_kg"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "convert_lbs_to_kg",
-            "description": "Converts patient weight from pounds to kilograms.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "weight_lbs": {
-                        "type": "number",
-                        "description": "The patient's weight in pounds.",
-                    }
-                },
-                "required": ["weight_lbs"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
             "name": "calculate_math",
             "description": "Performs basic math (multiplication, division, addition, subtraction). Use this for ALL calculations to ensure accuracy.",
             "parameters": {
@@ -90,15 +56,7 @@ class Generator:
         # We no longer tell it HOW to format JSON. The embedded Jinja template handles that.
         # We only dictate clinical behavior and tool triggering rules.
         system_prompt = (
-            "You are an expert medical text interpreter. Answer ONLY from the provided context. "
-            "ACCURACY IS CRITICAL.\n\n"
-            "MANDATORY TOOL USAGE:\n"
-            "1. You MUST use 'convert_lbs_to_kg' for ANY weight conversion from pounds.\n"
-            "2. You MUST use 'calculate_math' for ANY and ALL math (e.g., multiplication, division).\n"
-            "3. DO NOT perform mental math. If you need to calculate a dose, you MUST call the tool first.\n\n"
-            "THINKING PROCESS:\n"
-            "Before answering or calling a tool, reason through the case inside <think> tags. "
-            "Plan which tools you will call in order. Be direct and clinically useful."
+			"You are a expert medical text interpreter, not a medical expert. Answer only from the provided context. Be direct, concise, and clinically useful. Do not add filler, hedging, or meta commentary. If the answer is not in the context, simply state so. In your response, never mention pages, chunk numbers, filenames, scores, retrieval metadata, or that images or attachments were provided. Give the answer itself, not instructions about the source. Be concise, direct, and clinically useful. Do not make up any language not in the source text. It is ok to repeat the source verbatim if it answers the user's query. Tool use is mandatory where it is necessary: DO NOT perform mental math, you must use tool calls for all deterministic things and anywhere they can be used. When choosing a tool, choose one that will accomplish a task in the fewest tool calls (e.g. dont call the math twice when a single tool will provide the appropriate calculation). As always, plan which tools you will call in order. Be direct and clinically useful."
         )
 
         context_parts: list[str] = []
