@@ -43,6 +43,9 @@ class ChatMessage(BaseModel):
 class ChatRequest(BaseModel):
 	query: str = Field(..., min_length=1, description="Clinical query to answer")
 	history: list[ChatMessage] = Field(default_factory=list, description="Prior conversation turns")
+	tools_mode: bool = False
+	thinking_mode: bool = True
+
 
 
 @asynccontextmanager
@@ -50,6 +53,7 @@ async def lifespan(app: FastAPI):
 	try:
 		app.state.vector_store = VectorStore()
 		app.state.generator = Generator()
+		await app.state.generator.setup_mcp()
 	except Exception as exc:  # pragma: no cover - startup failure is surfaced to the server log
 		app.state.vector_store = None
 		app.state.generator = None
@@ -111,12 +115,15 @@ async def chat(request: ChatRequest) -> EventSourceResponse:
 		yield {"event": "start", "data": json.dumps({"query": request.query, "results": len(retrieved_context)})}
 		try:
 			async for token in generator.stream_response(
-				request.query,
-				retrieved_context,
-				[
+				query=request.query,
+				retrieved_context=retrieved_context,
+				history=[
 					message.model_dump() if hasattr(message, "model_dump") else message.dict()
 					for message in request.history
 				],
+				tools_mode=request.tools_mode,
+				thinking_mode=request.thinking_mode
+
 			):
 				yield {"event": "token", "data": token}
 			yield {"event": "done", "data": "[DONE]"}

@@ -9,7 +9,22 @@ const newSessionButton = document.getElementById('new-session-button');
 const sessionList = document.getElementById('session-list');
 const chatHistory = document.getElementById('chat-history');
 const chatForm = document.getElementById('chat-form');
-const queryInput = document.getElementById('query-input');
+const chatInput = document.getElementById('chat-input');
+let isToolsModeActive = false;
+let isThinkingModeActive = true;
+
+document.getElementById('tools-toggle').addEventListener('change', (e) => {
+	isToolsModeActive = e.target.checked;
+	if (isToolsModeActive) {
+		chatInput.placeholder = "E.g., Calculate the PESI score for a 65yo male...";
+	} else {
+		chatInput.placeholder = "Ask the MGH WhiteBook a clinical question...";
+	}
+});
+
+document.getElementById('think-toggle').addEventListener('change', (e) => {
+	isThinkingModeActive = e.target.checked;
+});
 const sendButton = document.getElementById('send-button');
 
 const appState = {
@@ -363,7 +378,7 @@ function createThinkParagraphElement(paragraphText, isOpen = false) {
 
 function renderThinkThread(text, isComplete) {
 	const thread = document.createElement('div');
-	thread.className = 'think-thread';
+	thread.className = 'think-block';
 
 	const paragraphs = splitThinkParagraphs(text);
 	if (paragraphs.length === 0) {
@@ -404,7 +419,7 @@ function appendAssistantMessage(message, options = {}) {
 
 	if (message.thinkContent) {
 		const thinkContainer = document.createElement('div');
-		thinkContainer.className = 'think-thread';
+		thinkContainer.className = 'think-block';
 		updateThinkThread(thinkContainer, message.thinkContent, true);
 		assistantBubble.appendChild(thinkContainer);
 	}
@@ -560,8 +575,8 @@ function deleteSession(sessionId) {
 }
 
 function autoResizeTextarea() {
-	queryInput.style.height = 'auto';
-	queryInput.style.height = `${Math.min(queryInput.scrollHeight, 220)}px`;
+	chatInput.style.height = 'auto';
+	chatInput.style.height = `${Math.min(chatInput.scrollHeight, 220)}px`;
 }
 
 function parseSSEChunk(buffer) {
@@ -699,7 +714,7 @@ async function sendMessage(query) {
 	const userBubble = appendMessage('user', query);
 	const assistantBubble = createMessageElement('assistant');
 	const thinkContainer = document.createElement('div');
-	thinkContainer.className = 'think-thread';
+	thinkContainer.className = 'think-block';
 	assistantBubble.appendChild(thinkContainer);
 	const answerContainer = document.createElement('div');
 	answerContainer.className = 'assistant-answer';
@@ -727,6 +742,8 @@ async function sendMessage(query) {
 			body: JSON.stringify({
 				query,
 				history: buildHistoryPayload(session).slice(0, -1),
+				tools_mode: isToolsModeActive,
+				thinking_mode: isThinkingModeActive,
 			}),
 		});
 
@@ -858,10 +875,10 @@ async function sendMessage(query) {
 		throw error;
 	} finally {
 		sendButton.disabled = false;
-		queryInput.disabled = false;
-		queryInput.value = '';
+		chatInput.disabled = false;
+		chatInput.value = '';
 		autoResizeTextarea();
-		queryInput.focus();
+		chatInput.focus();
 	}
 
 	return { userBubble, assistantBubble };
@@ -870,13 +887,13 @@ async function sendMessage(query) {
 chatForm.addEventListener('submit', async (event) => {
 	event.preventDefault();
 
-	const query = queryInput.value.trim();
+	const query = chatInput.value.trim();
 	if (!query) {
 		return;
 	}
 
 	sendButton.disabled = true;
-	queryInput.disabled = true;
+	chatInput.disabled = true;
 
 	try {
 		await sendMessage(query);
@@ -885,8 +902,8 @@ chatForm.addEventListener('submit', async (event) => {
 	}
 });
 
-queryInput.addEventListener('input', autoResizeTextarea);
-queryInput.addEventListener('keydown', (event) => {
+chatInput.addEventListener('input', autoResizeTextarea);
+chatInput.addEventListener('keydown', (event) => {
 	if (event.key === 'Enter' && !event.shiftKey) {
 		event.preventDefault();
 		chatForm.requestSubmit();

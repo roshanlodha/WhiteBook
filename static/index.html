@@ -36,13 +36,41 @@
 				<main id="chat-history" class="chat-history" aria-live="polite" aria-relevant="additions text"></main>
 
 				<footer class="composer-shell">
+					<div id="tools-toggle-container">
+						<input type="checkbox" id="tools-toggle" />
+						<label for="tools-toggle">
+							<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+								<rect x="4" y="2" width="16" height="20" rx="2" ry="2"></rect>
+								<line x1="8" y1="6" x2="16" y2="6"></line>
+								<line x1="16" y1="14" x2="16" y2="18"></line>
+								<path d="M16 10h.01"></path>
+								<path d="M12 10h.01"></path>
+								<path d="M8 10h.01"></path>
+								<path d="M12 14h.01"></path>
+								<path d="M8 14h.01"></path>
+								<path d="M12 18h.01"></path>
+								<path d="M8 18h.01"></path>
+							</svg>
+							Calculators
+						</label>
+
+						<input type="checkbox" id="think-toggle" checked />
+						<label for="think-toggle">
+							<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+								<path d="M9 18h6"></path>
+								<path d="M10 22h4"></path>
+								<path d="M12 2a7 7 0 0 0-7 7c0 2.32 1.15 4.38 2.92 5.64a9 9 0 0 0 1.08 6.36h8a9 9 0 0 0 1.08-6.36C19.85 13.38 21 11.32 21 9a7 7 0 0 0-7-7z"></path>
+							</svg>
+							Deep Think
+						</label>
+					</div>
 					<form id="chat-form" class="composer" autocomplete="off">
-						<label class="sr-only" for="query-input">Ask a question</label>
+						<label class="sr-only" for="chat-input">Ask a question</label>
 						<textarea
-							id="query-input"
+							id="chat-input"
 							name="query"
 							rows="1"
-							placeholder="Ask a question..."
+							placeholder="Ask the MGH WhiteBook a clinical question..."
 							spellcheck="false"
 						></textarea>
 						<button type="submit" id="send-button" aria-label="Send message">→</button>

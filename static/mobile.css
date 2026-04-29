@@ -124,14 +124,14 @@
 	}
 
 	/* Thinking Section */
-	.think-thread {
+	.think-block {
 		font-size: 13px;
 		border-left: 2px solid var(--border);
 		padding-left: 0.75rem;
 		margin-bottom: 1rem;
 	}
 
-	.think-thread .think-thread {
+	.think-block .think-block {
 		border-left: 0;
 		padding-left: 0;
 	}
