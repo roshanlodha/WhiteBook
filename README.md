@@ -22,7 +22,7 @@ WhiteBookLM is retrieval-augmented generation (RAG) model built on knowledge fro
 .venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-### Deploy latest code fast
+### (Re)Deploy latest code fast
 
 ```bash
 .venv/bin/python -m modal deploy -m app.main::app_modal
@@ -96,43 +96,13 @@ Recent deployment updates changed startup to improve reliability:
   - SSE endpoint for streamed answer generation.
   - Request body includes `query`, optional `history`, and tool/thinking mode toggles.
 
-## Local development
-
-### Prerequisites
-
-- Python 3.12 recommended
-- Virtual environment at `.venv/`
-- SQLite KB file present
-- GGUF model file present
-
-### Install dependencies
-
-```bash
-.venv/bin/python -m pip install -r requirements.txt
-```
-
-### Run locally
-
-```bash
-.venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
-```
-
-Then open [http://localhost:8000](http://localhost:8000).
-
-## Modal deployment
+## (Re)Deployment
 
 ### Deploy command
-
-Use module mode with the Modal app object:
 
 ```bash
 .venv/bin/python -m modal deploy -m app.main::app_modal
 ```
-
-### Why this form matters
-
-- `app/main.py` uses package-relative imports (for example `from .database import ...`), so file-script deploy mode can fail.
-- `-m app.main::app_modal` ensures Modal resolves the correct app object.
 
 ### Modal runtime notes
 
@@ -197,7 +167,7 @@ This is typically run separately from deployment, then copied into the runtime v
 
 ## Updating WhiteBookLM
 
-This section is the operational runbook for updating model/runtime assets and pushing changes live.
+This section is the operational runbook for updating model/runtime assets and then (re)deploying.
 
 ### Update the model
 
@@ -230,7 +200,7 @@ curl -sS -X POST "http://localhost:8000/api/retrieve" \
   -d '{"query":"ventricular tachycardia treatment","top_k":3,"cutoff":0.2}'
 ```
 
-### Redeploy after any update
+### (Re)Deploy after any update
 
 Redeploy whenever code, model path, DB, or static UI assets are changed.
 
@@ -267,3 +237,13 @@ WhiteBook/
 ├── staffbook_kb.sqlite
 └── Qwen3-8B-Q4_K_M.gguf
 ```
+
+## License
+
+Licensed under MIT license.
+
+The tool is intended for use as a research and informational tool only and is not a substitute for professional medical advice, diagnosis, or treatment. The Service is provided "as is" without any warranties of any kind, express or implied, including but not limited to the accuracy, completeness, or reliability of the calculations or results.
+
+Choice of calculation tasks chosen from "most popular" calculators list from website of MDCalc Ltd (New York, NY). Used with permission. Inclusion of these calculators does not constitute endorsement by MDCalc.
+
+## TODO
