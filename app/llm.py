@@ -4,9 +4,6 @@ import re
 from pathlib import Path
 from typing import Any, AsyncGenerator
 
-from mcp import ClientSession
-from mcp.client.stdio import stdio_client, StdioServerParameters
-from llama_cpp import Llama
 from app.calculators import calculate_math
 
 DEFAULT_LLM_PATH = "/data/Qwen3-8B-Q4_K_M.gguf"
@@ -35,9 +32,11 @@ MATH_TOOL_SCHEMA = [
 
 class Generator:
     def __init__(self, model_path: str | Path | None = None) -> None:
-        self.model_path = Path(model_path) if model_path is not None else DEFAULT_LLM_PATH
+        self.model_path = Path(model_path) if model_path is not None else Path(DEFAULT_LLM_PATH)
         if not self.model_path.exists():
             raise FileNotFoundError(f"LLM not found at {self.model_path}")
+
+        from llama_cpp import Llama
 
         self.llm = Llama(
             model_path=str(self.model_path),
@@ -45,8 +44,16 @@ class Generator:
             n_ctx=16384,
             verbose=False,
         )
+        self.session: Any = None
+        self.cached_mcp_schemas: list[dict[str, Any]] = []
+        self.stdio_transport = None
+        self.read = None
+        self.write = None
 
     async def setup_mcp(self):
+        from mcp import ClientSession
+        from mcp.client.stdio import stdio_client, StdioServerParameters
+
         server_params = StdioServerParameters(
             command="uvx",
             args=["medcalc@latest"]
@@ -71,6 +78,20 @@ class Generator:
             })
         print(f"Loaded {len(self.cached_mcp_schemas)} MCP tools.")
 
+    async def close(self) -> None:
+        if self.session is not None:
+            try:
+                await self.session.__aexit__(None, None, None)
+            except Exception:
+                pass
+            self.session = None
+        if self.stdio_transport is not None:
+            try:
+                await self.stdio_transport.__aexit__(None, None, None)
+            except Exception:
+                pass
+            self.stdio_transport = None
+
     async def stream_response(
         self,
         query: str,
@@ -94,8 +115,8 @@ class Generator:
                 context_parts.append(f"--- Chunk {index} ---\nHeading: {heading}\nText: {text}")
             context_string = "\n\n".join(context_parts) if context_parts else "No retrieved context available."
         else:
-            # Pure Calculator Mode
-            active_tools = MATH_TOOL_SCHEMA + self.cached_mcp_schemas
+            # Pure Calculator Mode (MCP optional if setup_mcp failed)
+            active_tools = MATH_TOOL_SCHEMA + (self.cached_mcp_schemas or [])
             system_prompt = "You are a expert medical calculator, not a medical expert. Based on the requested calculation, choose a tool from your available tools to answer the query. Be direct, concise, and clinically useful. Do not add filler, hedging, or meta commentary. If you are unable to answer due to a lack of tools or a lack of information in the context, simply state so. In your response, never mention pages, chunk numbers, filenames, scores, retrieval metadata, or that images or attachments were provided. Give the answer itself, not instructions about the source. Do not make up any information not in provided input and tool. Tool use is mandatory where it is necessary: DO NOT perform mental math, you must use tool calls for all deterministic things and anywhere they can be used. When choosing a tool, choose one that will accomplish a task in the fewest tool calls (e.g. dont call the math twice when a single tool will provide the appropriate calculation). As always, plan which tools you will call in order. Be direct and clinically useful."
             context_string = "" # Bypass RAG completely
 
@@ -195,6 +216,8 @@ class Generator:
                 try:
                     if name == "calculate_math":
                         result = calculate_math(**args)
+                    elif self.session is None:
+                        result = {"error": "Medical calculator MCP is unavailable in this deployment."}
                     else:
                         # Execute via MCP
                         try:

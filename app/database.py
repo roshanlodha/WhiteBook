@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from sentence_transformers import SentenceTransformer
 
 
 DB_PATH = "/data/staffbook_kb.sqlite"
@@ -29,6 +28,8 @@ class VectorStore:
 		self.db_path = Path(db_path) if db_path is not None else Path(DB_PATH)
 		if not self.db_path.exists():
 			raise FileNotFoundError(f"Database not found at {self.db_path}")
+
+		from sentence_transformers import SentenceTransformer
 
 		self.embedder = SentenceTransformer(EMBED_MODEL_NAME, trust_remote_code=True)
 		self._records: list[ChunkRecord] = []
