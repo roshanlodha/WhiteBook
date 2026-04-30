@@ -10,8 +10,7 @@ import numpy as np
 from sentence_transformers import SentenceTransformer
 
 
-ROOT_DIR = Path(__file__).resolve().parent.parent
-DEFAULT_DB_PATH = ROOT_DIR / "staffbook_kb.sqlite"
+DB_PATH = "/data/staffbook_kb.sqlite"
 EMBED_MODEL_NAME = "Alibaba-NLP/gte-modernbert-base"
 
 
@@ -27,7 +26,7 @@ class ChunkRecord:
 
 class VectorStore:
 	def __init__(self, db_path: str | os.PathLike[str] | None = None) -> None:
-		self.db_path = Path(db_path) if db_path is not None else DEFAULT_DB_PATH
+		self.db_path = Path(db_path) if db_path is not None else Path(DB_PATH)
 		if not self.db_path.exists():
 			raise FileNotFoundError(f"Database not found at {self.db_path}")
 

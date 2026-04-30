@@ -9,8 +9,7 @@ from mcp.client.stdio import stdio_client, StdioServerParameters
 from llama_cpp import Llama
 from app.calculators import calculate_math
 
-ROOT_DIR = Path(__file__).resolve().parent.parent
-DEFAULT_LLM_PATH = ROOT_DIR / "Qwen3-8B-Q4_K_M.gguf"
+DEFAULT_LLM_PATH = "/data/Qwen3-8B-Q4_K_M.gguf"
 
 MATH_TOOL_SCHEMA = [
     {

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import modal
+
 import json
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -13,6 +15,25 @@ from sse_starlette.sse import EventSourceResponse
 
 from .database import VectorStore
 from .llm import Generator
+
+image = (
+	modal.Image.debian_slim(python_version="3.12")
+	.pip_install(
+		"fastapi",
+		"uvicorn",
+		"sse-starlette",
+		"sentence-transformers",
+		"numpy",
+	)
+	.pip_install(
+		"llama-cpp-python",
+		extra_index_url="https://abetlen.github.io/llama-cpp-python/whl/cu121",
+	)
+	.pip_install("mcp")
+)
+
+app_modal = modal.App("whitebook", image=image)
+volume = modal.Volume.from_name("whitebook-data")
 
 
 class RetrieveRequest(BaseModel):
@@ -141,3 +162,15 @@ async def health() -> dict[str, Any]:
 		"vector_store_loaded": vector_store is not None,
 		"chunk_count": vector_store.size if vector_store is not None else 0,
 	}
+
+
+@app_modal.function(
+	gpu="T4",
+	volumes={"/data": volume},
+	min_containers=1,  # Keeps 1 container warm for instant ED use
+	timeout=300,
+)
+@modal.concurrent(max_inputs=10)
+@modal.asgi_app()
+def fastapi_app():
+	return app
