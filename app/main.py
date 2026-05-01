@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import modal
 
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -25,39 +24,6 @@ from .providers.groq_provider import stream_chat as stream_groq_chat
 from .tooling import build_calculator_tools, build_rag_tools
 
 load_dotenv()
-
-# Modal provides the driver / libcuda, but not libcudart. llama-cpp-python's cu121
-# wheel links against libcudart.so.12 — use NVIDIA's CUDA 12 runtime image (see Modal CUDA guide).
-_CUDA_TAG = "12.4.0-runtime-ubuntu22.04"
-
-image = (
-	modal.Image.from_registry(f"nvidia/cuda:{_CUDA_TAG}", add_python="3.12")
-	.entrypoint([])
-	.pip_install(
-		"fastapi",
-		"uvicorn",
-		"sse-starlette",
-		"sentence-transformers",
-		"numpy",
-		"httpx",
-		"groq",
-		"tenacity",
-		"uv",
-	)
-	.pip_install(
-		"llama-cpp-python",
-		extra_index_url="https://abetlen.github.io/llama-cpp-python/whl/cu121",
-	)
-	.pip_install("mcp", "medcalc")
-	.run_commands(
-		"python -c \"from sentence_transformers import SentenceTransformer; SentenceTransformer('Alibaba-NLP/gte-modernbert-base', trust_remote_code=True)\""
-	)
-	.add_local_dir("static", "/app/static")
-	.add_local_dir("images", "/app/images")
-)
-
-app_modal = modal.App("whitebook", image=image)
-volume = modal.Volume.from_name("whitebook-data")
 
 
 class RetrieveRequest(BaseModel):
@@ -320,19 +286,6 @@ async def health() -> dict[str, Any]:
 		"chunk_count": vector_store.size if vector_store is not None else 0,
 		"startup_error": getattr(app.state, "initialization_error", None),
 	}
-
-
-@app_modal.function(
-	gpu="T4",
-	volumes={"/data": volume},
-	min_containers=1,
-	startup_timeout=900,
-	timeout=300,
-)
-@modal.concurrent(max_inputs=10)
-@modal.asgi_app()
-def fastapi_app():
-	return app
 
 
 # Re-export for backward compatibility / tests.

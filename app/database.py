@@ -9,7 +9,7 @@ from typing import Any
 import numpy as np
 
 
-DEFAULT_MODAL_DB_PATH = Path("/data/staffbook_kb.sqlite")
+DEFAULT_RUNTIME_DB_PATH = Path("/data/staffbook_kb.sqlite")
 DEFAULT_LOCAL_DB_PATH = Path(__file__).resolve().parent.parent / "staffbook_kb.sqlite"
 EMBED_MODEL_NAME = "Alibaba-NLP/gte-modernbert-base"
 
@@ -18,8 +18,8 @@ def _resolve_db_path() -> Path:
 	env_path = os.getenv("DB_PATH")
 	if env_path:
 		return Path(env_path).expanduser()
-	if DEFAULT_MODAL_DB_PATH.exists():
-		return DEFAULT_MODAL_DB_PATH
+	if DEFAULT_RUNTIME_DB_PATH.exists():
+		return DEFAULT_RUNTIME_DB_PATH
 	return DEFAULT_LOCAL_DB_PATH
 
 
