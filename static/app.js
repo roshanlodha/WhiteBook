@@ -16,7 +16,7 @@ let isThinkingModeActive = false;
 document.getElementById('tools-toggle').addEventListener('change', (e) => {
 	isToolsModeActive = e.target.checked;
 	if (isToolsModeActive) {
-		chatInput.placeholder = "E.g., Calculate the PESI score for a 65yo male...";
+		chatInput.placeholder = "E.g., Calculate the HEART score for a 65F patient...";
 	} else {
 		chatInput.placeholder = "Ask the MGH WhiteBook a clinical question...";
 	}
@@ -34,6 +34,7 @@ const appState = {
 
 const THINK_LABEL = 'thinking...';
 const TOOL_LABEL = 'calculating...';
+const DEFAULT_RATE_LIMIT_COOLDOWN_SECONDS = 30;
 
 const sourceViewerState = {
 	images: [],
@@ -48,6 +49,13 @@ const sourceViewerState = {
 
 if (typeof marked !== 'undefined') {
 	marked.setOptions({ gfm: true, breaks: true });
+}
+
+function normalizeMarkdownOutput(content) {
+	if (typeof window.MarkdownFormatter?.normalizeMarkdownOutput === 'function') {
+		return window.MarkdownFormatter.normalizeMarkdownOutput(content);
+	}
+	return (content || '').toString().trim();
 }
 
 function loadStoredSessions() {
@@ -156,7 +164,8 @@ function createMessageElement(role) {
 function createMarkdownContainer(content) {
 	const container = document.createElement('div');
 	container.className = 'markdown-body';
-	container.innerHTML = typeof marked !== 'undefined' ? marked.parse(content || '') : content || '';
+	const normalized = normalizeMarkdownOutput(content || '');
+	container.innerHTML = typeof marked !== 'undefined' ? marked.parse(normalized) : normalized;
 	return container;
 }
 
@@ -291,6 +300,10 @@ function updateSourceViewer() {
 	}
 
 	const currentImage = sourceViewerState.images[sourceViewerState.index];
+	sourceViewerState.imageElement.onerror = () => {
+		sourceViewerState.imageElement.alt = 'Retrieved page image unavailable';
+		sourceViewerState.captionElement.textContent = 'Image unavailable for this retrieved chunk.';
+	};
 	sourceViewerState.imageElement.src = sourceImageUrl(currentImage);
 	sourceViewerState.imageElement.alt = 'Retrieved Page';
 	sourceViewerState.captionElement.textContent = `Page ${sourceViewerState.index + 1} of ${sourceViewerState.images.length}`;
@@ -398,6 +411,79 @@ function appendMessage(role, text = '') {
 	chatHistory.appendChild(element);
 	scrollToBottom();
 	return element;
+}
+
+function appendRateLimitMessageWithRetry(query, retryAfterSeconds) {
+	const cooldownSeconds = Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0
+		? Math.ceil(retryAfterSeconds)
+		: DEFAULT_RATE_LIMIT_COOLDOWN_SECONDS;
+	const cooldownEndsAt = Date.now() + cooldownSeconds * 1000;
+
+	const wrapper = document.createElement('div');
+	wrapper.className = 'message system retry-message';
+
+	const text = document.createElement('p');
+	text.className = 'retry-message-text';
+	text.textContent = `Too many requests right now. Please retry after ${cooldownSeconds} seconds.`;
+	wrapper.appendChild(text);
+
+	const controls = document.createElement('div');
+	controls.className = 'retry-controls';
+
+	const toggleId = `retry-toggle-${Math.random().toString(36).slice(2, 10)}`;
+	const toggle = document.createElement('input');
+	toggle.type = 'checkbox';
+	toggle.className = 'retry-toggle-input';
+	toggle.id = toggleId;
+
+	const toggleLabel = document.createElement('label');
+	toggleLabel.className = 'retry-toggle-label';
+	toggleLabel.htmlFor = toggleId;
+	toggleLabel.textContent = 'Enable manual retry';
+
+	const retryButton = document.createElement('button');
+	retryButton.type = 'button';
+	retryButton.className = 'retry-button';
+	retryButton.disabled = true;
+
+	const updateRetryButtonState = () => {
+		const remainingSeconds = Math.max(0, Math.ceil((cooldownEndsAt - Date.now()) / 1000));
+		const cooldownDone = remainingSeconds === 0;
+		retryButton.disabled = !(toggle.checked && cooldownDone);
+		retryButton.textContent = cooldownDone
+			? 'Retry request'
+			: `Retry in ${remainingSeconds}s`;
+	};
+
+	const timer = window.setInterval(() => {
+		updateRetryButtonState();
+		if (Date.now() >= cooldownEndsAt) {
+			window.clearInterval(timer);
+		}
+	}, 1000);
+
+	toggle.addEventListener('change', updateRetryButtonState);
+	retryButton.addEventListener('click', async () => {
+		window.clearInterval(timer);
+		toggle.disabled = true;
+		retryButton.disabled = true;
+		retryButton.textContent = 'Retrying...';
+		sendButton.disabled = true;
+		chatInput.disabled = true;
+		try {
+			await sendMessage(query);
+		} catch {
+			// sendMessage already renders a user-visible error.
+		}
+	});
+
+	controls.appendChild(toggle);
+	controls.appendChild(toggleLabel);
+	controls.appendChild(retryButton);
+	wrapper.appendChild(controls);
+	chatHistory.appendChild(wrapper);
+	scrollToBottom();
+	updateRetryButtonState();
 }
 
 function appendStreamContainer(parent, isThinkMode) {
@@ -710,7 +796,7 @@ function buildHistoryPayload(session) {
 	return session.messages
 		.filter((message) => message.role === 'user' || message.role === 'assistant')
 		.map((message) => ({ role: message.role, content: message.content }))
-		.slice(-20);
+		.slice(-40);
 }
 
 async function sendMessage(query) {
@@ -745,7 +831,9 @@ async function sendMessage(query) {
 	let imageFilenames = [];
 
 	try {
-		retrievedResults = await retrieveContext(query);
+		if (!isToolsModeActive) {
+			retrievedResults = await retrieveContext(query);
+		}
 
 		const response = await fetch('/api/chat', {
 			method: 'POST',
@@ -853,6 +941,21 @@ async function sendMessage(query) {
 					throw new Error(message);
 				}
 
+				let providerPayload = null;
+				try {
+					const parsedPayload = JSON.parse(event.data);
+					if (parsedPayload && typeof parsedPayload === 'object' && parsedPayload.error && parsedPayload.type) {
+						providerPayload = parsedPayload;
+					}
+				} catch {
+					// Ignore non-JSON tokens from standard streaming content.
+				}
+				if (providerPayload) {
+					const providerError = new Error(providerPayload.error);
+					providerError.providerPayload = providerPayload;
+					throw providerError;
+				}
+
 				processText(event.data);
 				scrollToBottom();
 			}
@@ -873,7 +976,8 @@ async function sendMessage(query) {
 				answerContainer.appendChild(currentMarkdownContainer);
 			}
 
-			currentMarkdownContainer.innerHTML = typeof marked !== 'undefined' ? marked.parse(assistantFinalAnswer) : assistantFinalAnswer;
+			const normalized = normalizeMarkdownOutput(assistantFinalAnswer);
+			currentMarkdownContainer.innerHTML = typeof marked !== 'undefined' ? marked.parse(normalized) : normalized;
 		}
 
 		if (assistantThinkText.trim().length > 0) {
@@ -903,7 +1007,11 @@ async function sendMessage(query) {
 		scrollToBottom();
 	} catch (error) {
 		assistantBubble.remove();
-		appendMessage('system', error instanceof Error ? error.message : 'Request failed.');
+		if (error instanceof Error && error.providerPayload?.type === 'rate_limit') {
+			appendRateLimitMessageWithRetry(query, error.providerPayload.retry_after_seconds);
+		} else {
+			appendMessage('system', error instanceof Error ? error.message : 'Request failed.');
+		}
 		throw error;
 	} finally {
 		sendButton.disabled = false;

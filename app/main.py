@@ -8,13 +8,23 @@ from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException
+from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 from fastapi.responses import FileResponse
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from .database import VectorStore
-from .llm_router import stream_groq, stream_modal
+from .prompts import (
+	SYSTEM_PROMPT,
+	build_calculator_messages,
+	build_chat_messages,
+	build_retrieval_query,
+)
+from .providers.groq_provider import stream_chat as stream_groq_chat
+from .tooling import build_calculator_tools, build_rag_tools
+
+load_dotenv()
 
 # Modal provides the driver / libcuda, but not libcudart. llama-cpp-python's cu121
 # wheel links against libcudart.so.12 — use NVIDIA's CUDA 12 runtime image (see Modal CUDA guide).
@@ -38,7 +48,7 @@ image = (
 		"llama-cpp-python",
 		extra_index_url="https://abetlen.github.io/llama-cpp-python/whl/cu121",
 	)
-	.pip_install("mcp")
+	.pip_install("mcp", "medcalc")
 	.run_commands(
 		"python -c \"from sentence_transformers import SentenceTransformer; SentenceTransformer('Alibaba-NLP/gte-modernbert-base', trust_remote_code=True)\""
 	)
@@ -78,10 +88,47 @@ class ChatMessage(BaseModel):
 class ChatRequest(BaseModel):
 	query: str = Field(..., min_length=1, description="Clinical query to answer")
 	history: list[ChatMessage] = Field(default_factory=list, description="Prior conversation turns")
-	backend: Literal["groq", "modal"] = Field(
-		...,
-		description='Generation backend: either "groq" or "modal"',
+	backend: Literal["groq"] = Field(
+		default="groq",
+		description='Generation backend. This migration supports only "groq".',
 	)
+	tools_mode: bool = Field(
+		default=False,
+		description=(
+			"If true, route the query through the clinical calculator path "
+			"(MedCalc tools only, no WhiteBook retrieval). If false, "
+			"route through the strict RAG path (no tools attached, much smaller "
+			"per-request payload)."
+		),
+	)
+	thinking_mode: bool = Field(default=False, description="If true, request Qwen thinking mode (/think).")
+
+
+def _normalize_image_filename(raw_filename: str | None) -> str | None:
+	if not raw_filename:
+		return None
+
+	safe_name = Path(raw_filename).name
+	candidates = [safe_name]
+	stem = Path(safe_name).stem
+	for ext in (".png", ".jpg", ".jpeg", ".webp"):
+		candidate = f"{stem}{ext}"
+		if candidate not in candidates:
+			candidates.append(candidate)
+
+	for candidate in candidates:
+		if (IMAGES_DIR / candidate).exists():
+			return candidate
+	return None
+
+
+def _with_resolved_images(chunks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+	resolved: list[dict[str, Any]] = []
+	for chunk in chunks:
+		normalized = dict(chunk)
+		normalized["image_filename"] = _normalize_image_filename(chunk.get("image_filename"))
+		resolved.append(normalized)
+	return resolved
 
 
 async def _initialize_runtime(app: FastAPI) -> None:
@@ -135,7 +182,6 @@ async def lifespan(app: FastAPI):
 	app.state.initialized = False
 	app.state.initialization_error = None
 	app.state.init_lock = asyncio.Lock()
-	# Start warmup asynchronously so ASGI startup never blocks and times out.
 	app.state.initialization_task = asyncio.create_task(_initialize_runtime(app))
 	app.state.initialization_task.add_done_callback(lambda t: _capture_init_task_result(t, app))
 
@@ -187,7 +233,7 @@ async def retrieve(request: RetrieveRequest) -> RetrieveResponse:
 	except Exception as exc:
 		raise HTTPException(status_code=500, detail=f"Retrieval failed: {exc}") from exc
 
-	return RetrieveResponse(results=[ChunkResponse(**result) for result in results])
+	return RetrieveResponse(results=[ChunkResponse(**result) for result in _with_resolved_images(results)])
 
 
 @app.post("/api/chat")
@@ -202,45 +248,50 @@ async def chat(request: ChatRequest) -> StreamingResponse:
 	if vector_store is None:
 		raise HTTPException(status_code=503, detail="Vector store is not initialized")
 
-	try:
-		retrieved_context = vector_store.search(request.query)
-	except Exception as exc:
-		raise HTTPException(status_code=500, detail=f"Retrieval failed: {exc}") from exc
+	history_dicts = [{"role": message.role, "content": message.content} for message in request.history]
 
-	context_parts: list[str] = []
-	for index, chunk in enumerate(retrieved_context, start=1):
-		heading = chunk.get("heading_context") or ""
-		text = chunk.get("text_content") or ""
-		context_parts.append(f"Chunk {index}\nHeading: {heading}\nText: {text}")
-	context_block = "\n\n".join(context_parts) if context_parts else "No relevant context retrieved."
-
-	system_prompt = (
-		"You are an expert medical text interpreter, not a medical expert. "
-		"Answer only from the provided context. Be direct, concise, and clinically useful. "
-		"If the answer is not in the context, explicitly say so."
-	)
-	user_prompt = (
-		"Use the following retrieved medical context to answer the question.\n\n"
-		f"{context_block}\n\n"
-		f"Question: {request.query}"
-	)
-
-	messages: list[dict[str, str]] = [{"role": "system", "content": system_prompt}]
-	messages.extend(
-		[
-			{"role": message.role, "content": message.content}
-			for message in request.history
-			if message.content.strip()
-		]
-	)
-	messages.append({"role": "user", "content": user_prompt})
-
-	if request.backend == "groq":
-		streamer = stream_groq(messages)
-	elif request.backend == "modal":
-		streamer = stream_modal(messages)
+	if request.tools_mode:
+		# Calculator path: no retrieval, calculator-tooling attached, calculator
+		# system prompt. Bypassing retrieval keeps the per-request payload small
+		# (1.4k tokens of tools instead of 1.4k tools + 5k retrieval) and avoids
+		# the model getting nudged into "answer from the WhiteBook" mode when
+		# the user explicitly asked for a calculation.
+		tools, handlers = build_calculator_tools()
+		messages = build_calculator_messages(
+			query=request.query,
+			history=history_dicts,
+			thinking_mode=request.thinking_mode,
+		)
 	else:
-		raise HTTPException(status_code=400, detail='Invalid backend. Use "groq" or "modal".')
+		# RAG path: WhiteBook retrieval is the source of truth, with no calculator
+		# tools attached.
+		try:
+			retrieval_query = build_retrieval_query(request.query, history_dicts)
+			retrieved_context = _with_resolved_images(vector_store.search(retrieval_query))
+		except Exception as exc:
+			raise HTTPException(status_code=500, detail=f"Retrieval failed: {exc}") from exc
+		tools, handlers = build_rag_tools()
+		messages = build_chat_messages(
+			query=request.query,
+			history=history_dicts,
+			retrieved_context=retrieved_context,
+			thinking_mode=request.thinking_mode,
+		)
+
+	async def _execute_tool(name: str, arguments: dict[str, Any]) -> Any:
+		handler = handlers.get(name)
+		if handler is None:
+			return {"error": f"Unknown tool: {name}"}
+		try:
+			return handler(arguments)
+		except Exception as exc:
+			return {"error": str(exc)}
+
+	streamer = stream_groq_chat(
+		messages,
+		tools=tools,
+		tool_executor=_execute_tool,
+	)
 
 	return StreamingResponse(
 		streamer,
@@ -274,7 +325,7 @@ async def health() -> dict[str, Any]:
 @app_modal.function(
 	gpu="T4",
 	volumes={"/data": volume},
-	min_containers=1,  # Keeps 1 container warm for instant ED use
+	min_containers=1,
 	startup_timeout=900,
 	timeout=300,
 )
@@ -282,3 +333,7 @@ async def health() -> dict[str, Any]:
 @modal.asgi_app()
 def fastapi_app():
 	return app
+
+
+# Re-export for backward compatibility / tests.
+CHAT_SYSTEM_PROMPT = SYSTEM_PROMPT

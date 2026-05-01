@@ -1,66 +1,75 @@
+"""Deterministic arithmetic helper used by the LLM tool.
+
+`eval()` is intentionally avoided. We compile the expression to a constant
+arithmetic AST and walk it; anything outside `+ - * / // % **` and numeric
+literals is rejected. This keeps the tool safe even if the model is induced to
+emit hostile expressions.
+"""
+
+from __future__ import annotations
+
+import ast
+import math
+import operator
+
+_BIN_OPS: dict[type[ast.operator], object] = {
+	ast.Add: operator.add,
+	ast.Sub: operator.sub,
+	ast.Mult: operator.mul,
+	ast.Div: operator.truediv,
+	ast.FloorDiv: operator.floordiv,
+	ast.Mod: operator.mod,
+	ast.Pow: operator.pow,
+}
+
+_UNARY_OPS: dict[type[ast.unaryop], object] = {
+	ast.UAdd: operator.pos,
+	ast.USub: operator.neg,
+}
+
+_ALLOWED_NAMES: dict[str, float] = {"pi": math.pi, "e": math.e}
+
+
+def _evaluate(node: ast.AST) -> float:
+	if isinstance(node, ast.Expression):
+		return _evaluate(node.body)
+	if isinstance(node, ast.Constant):
+		if isinstance(node.value, (int, float)):
+			return float(node.value)
+		raise ValueError(f"Unsupported literal: {node.value!r}")
+	if isinstance(node, ast.Name):
+		if node.id in _ALLOWED_NAMES:
+			return float(_ALLOWED_NAMES[node.id])
+		raise ValueError(f"Unsupported name: {node.id}")
+	if isinstance(node, ast.BinOp):
+		op_type = type(node.op)
+		if op_type not in _BIN_OPS:
+			raise ValueError(f"Unsupported operator: {op_type.__name__}")
+		left = _evaluate(node.left)
+		right = _evaluate(node.right)
+		return float(_BIN_OPS[op_type](left, right))  # type: ignore[arg-type]
+	if isinstance(node, ast.UnaryOp):
+		op_type = type(node.op)
+		if op_type not in _UNARY_OPS:
+			raise ValueError(f"Unsupported unary operator: {op_type.__name__}")
+		operand = _evaluate(node.operand)
+		return float(_UNARY_OPS[op_type](operand))  # type: ignore[operator]
+	raise ValueError(f"Unsupported expression node: {type(node).__name__}")
+
+
 def calculate_math(expression: str) -> dict:
-    """
-    Evaluates a simple mathematical expression.
-    Supports basic operators: +, -, *, /
-    """
-    try:
-        # Using a very restricted eval-like approach for safety in this demo
-        # For production, use a proper math parser
-        allowed_chars = "0123456789+-*/.() "
-        if not all(c in allowed_chars for c in expression):
-             return {"error": "Invalid characters in expression"}
-        
-        result = eval(expression, {"__builtins__": {}})
-        return {"expression": expression, "result": round(float(result), 2)}
-    except Exception as e:
-        return {"error": str(e)}
+	"""Evaluate `expression` (basic arithmetic) and return a structured result."""
+	expression = (expression or "").strip()
+	if not expression:
+		return {"error": "Empty expression."}
+	try:
+		tree = ast.parse(expression, mode="eval")
+		result = _evaluate(tree)
+	except (SyntaxError, ValueError, ZeroDivisionError, OverflowError) as exc:
+		return {"error": f"{type(exc).__name__}: {exc}", "expression": expression}
 
-def calculate_procainamide_dose(weight_kg: float) -> dict:
-    """
-    Calculates Procainamide loading dose (17 mg/kg).
-    """
-    dose = weight_kg * 17
-    return {"weight_kg": weight_kg, "loading_dose_mg": round(dose, 2), "max_dose_mg": 1000}
+	if math.isnan(result) or math.isinf(result):
+		return {"error": "Result is not a finite number.", "expression": expression}
 
-def calculate_map(systolic: float, diastolic: float) -> dict:
-    """
-    Calculates Mean Arterial Pressure (MAP).
-    """
-    map_val = (systolic + 2 * diastolic) / 3
-    return {"systolic": systolic, "diastolic": diastolic, "mean_arterial_pressure": round(map_val, 2)}
-
-def calculate_maintenance_fluids(weight_kg: float) -> dict:
-    """
-    Calculates maintenance fluid rate using the 4-2-1 rule.
-    """
-    if weight_kg <= 10:
-        rate = weight_kg * 4
-    elif weight_kg <= 20:
-        rate = 40 + (weight_kg - 10) * 2
-    else:
-        rate = 60 + (weight_kg - 20) * 1
-    return {"weight_kg": weight_kg, "maintenance_rate_ml_hr": round(rate, 2), "daily_total_ml": round(rate * 24, 2)}
-
-def calculate_wells_pe(
-    heart_rate_gt_100: bool,
-    immobilization_or_surgery: bool,
-    previous_vte: bool,
-    hemoptysis: bool,
-    malignancy: bool,
-    clinical_signs_of_dvt: bool,
-    alternative_diagnosis_less_likely: bool
-) -> dict:
-    """
-    Calculates Wells' Criteria for Pulmonary Embolism.
-    """
-    score = 0
-    if heart_rate_gt_100: score += 1.5
-    if immobilization_or_surgery: score += 1.5
-    if previous_vte: score += 1.5
-    if hemoptysis: score += 1
-    if malignancy: score += 1
-    if clinical_signs_of_dvt: score += 3
-    if alternative_diagnosis_less_likely: score += 3
-
-    probability = "High" if score > 6 else "Moderate" if score >= 2 else "Low"
-    return {"wells_score": score, "probability": probability}
+	rounded = round(result, 4)
+	return {"expression": expression, "result": rounded}

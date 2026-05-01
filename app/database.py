@@ -9,8 +9,18 @@ from typing import Any
 import numpy as np
 
 
-DB_PATH = "/data/staffbook_kb.sqlite"
+DEFAULT_MODAL_DB_PATH = Path("/data/staffbook_kb.sqlite")
+DEFAULT_LOCAL_DB_PATH = Path(__file__).resolve().parent.parent / "staffbook_kb.sqlite"
 EMBED_MODEL_NAME = "Alibaba-NLP/gte-modernbert-base"
+
+
+def _resolve_db_path() -> Path:
+	env_path = os.getenv("DB_PATH")
+	if env_path:
+		return Path(env_path).expanduser()
+	if DEFAULT_MODAL_DB_PATH.exists():
+		return DEFAULT_MODAL_DB_PATH
+	return DEFAULT_LOCAL_DB_PATH
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,7 +35,7 @@ class ChunkRecord:
 
 class VectorStore:
 	def __init__(self, db_path: str | os.PathLike[str] | None = None) -> None:
-		self.db_path = Path(db_path) if db_path is not None else Path(DB_PATH)
+		self.db_path = Path(db_path).expanduser() if db_path is not None else _resolve_db_path()
 		if not self.db_path.exists():
 			raise FileNotFoundError(f"Database not found at {self.db_path}")
 

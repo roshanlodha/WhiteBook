@@ -22,6 +22,12 @@ WhiteBookLM is retrieval-augmented generation (RAG) model built on knowledge fro
 .venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
+Local env notes:
+
+- Ensure `.env` contains `GROQ_API_KEY` (required) and optional `GROQ_MODEL`.
+- DB path resolution order is: `DB_PATH` env var -> `/data/staffbook_kb.sqlite` -> local `staffbook_kb.sqlite`.
+- Retrieval source images are only returned when files exist in `images/`.
+
 ### (Re)Deploy latest code fast
 
 ```bash
@@ -34,7 +40,7 @@ WhiteBook combines:
 
 - A curated clinical knowledge base stored in SQLite (`staffbook_kb.sqlite`).
 - Dense embeddings for retrieval against medical reference content.
-- A local Qwen3 GGUF model for answer generation and token streaming.
+- A Groq-hosted chat model (`GROQ_MODEL`, defaulting to a fast Groq model) for answer generation.
 - Tool-capable chat flow (math tool + optional MCP medcalc integration).
 - A minimal web client backed by FastAPI + SSE (`/api/chat`).
 
@@ -46,11 +52,15 @@ The goal is high-signal, context-grounded responses for emergency workflows.
 
 - `app/main.py`
   - FastAPI app and API routes.
-  - Modal app definition (`app_modal`) and GPU function (`fastapi_app`).
-  - Non-blocking startup warmup for model/vector initialization.
+  - Groq chat orchestration, retrieval-aware prompt construction, and follow-up handling.
+  - Modal app definition (`app_modal`) and GPU function (`fastapi_app`) for deployment.
+  - Non-blocking startup warmup for vector initialization.
   - Health diagnostics (`/health`) with startup status.
 - `app/database.py`
   - `VectorStore` loads chunk embeddings from SQLite and performs cosine similarity search.
+  - Resolves DB location for both local and Modal runtimes.
+- `app/providers/groq_provider.py`
+  - Builds Groq payloads, streams SSE-compatible chunks, and maps upstream errors.
 - `app/llm.py`
   - `Generator` loads llama.cpp model and streams completion tokens.
   - Optional MCP tool bootstrap for medical calculators.
@@ -94,7 +104,7 @@ Recent deployment updates changed startup to improve reliability:
   - Returns ranked relevant chunks.
 - `POST /api/chat`
   - SSE endpoint for streamed answer generation.
-  - Request body includes `query`, optional `history`, and tool/thinking mode toggles.
+  - Request body includes `query`, optional `history`, `backend` (`groq`), and thinking mode toggle.
 
 ## (Re)Deployment
 
@@ -119,6 +129,17 @@ In Modal:
 - KB path: `/data/staffbook_kb.sqlite`
 
 If either file is missing from the volume, startup will fail and `/health` will show the reason.
+
+### `POST /api/retrieve` returns chunks but source page viewer is empty
+
+Cause:
+- `image_filename` values in `staffbook_kb.sqlite` do not exist in `images/` (for example old `page_*.jpg` entries with new `item_*.png` files).
+
+Behavior:
+- API now suppresses missing image filenames, so frontend avoids broken image links.
+
+Fix:
+- Rebuild/re-sync your ingestion output so DB `image_filename` values match actual files in `images/`.
 
 ## Troubleshooting
 
