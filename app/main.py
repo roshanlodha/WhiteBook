@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import modal
 
-import json
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Literal
@@ -11,11 +10,11 @@ from typing import Any, Literal
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 from fastapi.responses import FileResponse
+from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from sse_starlette.sse import EventSourceResponse
 
 from .database import VectorStore
-from .llm import Generator
+from .llm_router import stream_groq, stream_modal
 
 # Modal provides the driver / libcuda, but not libcudart. llama-cpp-python's cu121
 # wheel links against libcudart.so.12 — use NVIDIA's CUDA 12 runtime image (see Modal CUDA guide).
@@ -30,6 +29,9 @@ image = (
 		"sse-starlette",
 		"sentence-transformers",
 		"numpy",
+		"httpx",
+		"groq",
+		"tenacity",
 		"uv",
 	)
 	.pip_install(
@@ -76,25 +78,18 @@ class ChatMessage(BaseModel):
 class ChatRequest(BaseModel):
 	query: str = Field(..., min_length=1, description="Clinical query to answer")
 	history: list[ChatMessage] = Field(default_factory=list, description="Prior conversation turns")
-	tools_mode: bool = False
-	thinking_mode: bool = True
+	backend: Literal["groq", "modal"] = Field(
+		...,
+		description='Generation backend: either "groq" or "modal"',
+	)
 
 
 async def _initialize_runtime(app: FastAPI) -> None:
 	"""Initialize heavy runtime components in a worker thread."""
 	try:
 		vector_store = await asyncio.to_thread(VectorStore)
-		generator = await asyncio.to_thread(Generator)
-		mcp_initialized = False
-		try:
-			await generator.setup_mcp()
-			mcp_initialized = True
-		except Exception:  # pragma: no cover - MCP is optional at runtime
-			mcp_initialized = False
 
 		app.state.vector_store = vector_store
-		app.state.generator = generator
-		app.state.mcp_initialized = mcp_initialized
 		app.state.initialized = True
 		app.state.initialization_error = None
 	except Exception as exc:
@@ -137,8 +132,6 @@ async def ensure_runtime_ready(app: FastAPI) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
 	app.state.vector_store = None
-	app.state.generator = None
-	app.state.mcp_initialized = False
 	app.state.initialized = False
 	app.state.initialization_error = None
 	app.state.init_lock = asyncio.Lock()
@@ -152,10 +145,6 @@ async def lifespan(app: FastAPI):
 	if task and not task.done():
 		task.cancel()
 	app.state.vector_store = None
-	generator: Generator | None = getattr(app.state, "generator", None)
-	if generator is not None:
-		await generator.close()
-	app.state.generator = None
 
 
 app = FastAPI(title="WhiteBook Retrieval API", lifespan=lifespan)
@@ -202,42 +191,66 @@ async def retrieve(request: RetrieveRequest) -> RetrieveResponse:
 
 
 @app.post("/api/chat")
-async def chat(request: ChatRequest) -> EventSourceResponse:
+@app.post("/chat")
+async def chat(request: ChatRequest) -> StreamingResponse:
 	try:
 		await ensure_runtime_ready(app)
 	except Exception as exc:
 		raise HTTPException(status_code=503, detail=f"Runtime initialization failed: {exc}") from exc
 
 	vector_store: VectorStore | None = getattr(app.state, "vector_store", None)
-	generator: Generator | None = getattr(app.state, "generator", None)
-	if vector_store is None or generator is None:
-		raise HTTPException(status_code=503, detail="Application components are not initialized")
+	if vector_store is None:
+		raise HTTPException(status_code=503, detail="Vector store is not initialized")
 
 	try:
 		retrieved_context = vector_store.search(request.query)
 	except Exception as exc:
 		raise HTTPException(status_code=500, detail=f"Retrieval failed: {exc}") from exc
 
-	async def event_stream():
-		yield {"event": "start", "data": json.dumps({"query": request.query, "results": len(retrieved_context)})}
-		try:
-			async for token in generator.stream_response(
-				query=request.query,
-				retrieved_context=retrieved_context,
-				history=[
-					message.model_dump() if hasattr(message, "model_dump") else message.dict()
-					for message in request.history
-				],
-				tools_mode=request.tools_mode,
-				thinking_mode=request.thinking_mode
+	context_parts: list[str] = []
+	for index, chunk in enumerate(retrieved_context, start=1):
+		heading = chunk.get("heading_context") or ""
+		text = chunk.get("text_content") or ""
+		context_parts.append(f"Chunk {index}\nHeading: {heading}\nText: {text}")
+	context_block = "\n\n".join(context_parts) if context_parts else "No relevant context retrieved."
 
-			):
-				yield {"event": "token", "data": token}
-			yield {"event": "done", "data": "[DONE]"}
-		except Exception as exc:
-			yield {"event": "error", "data": json.dumps({"detail": str(exc)})}
+	system_prompt = (
+		"You are an expert medical text interpreter, not a medical expert. "
+		"Answer only from the provided context. Be direct, concise, and clinically useful. "
+		"If the answer is not in the context, explicitly say so."
+	)
+	user_prompt = (
+		"Use the following retrieved medical context to answer the question.\n\n"
+		f"{context_block}\n\n"
+		f"Question: {request.query}"
+	)
 
-	return EventSourceResponse(event_stream())
+	messages: list[dict[str, str]] = [{"role": "system", "content": system_prompt}]
+	messages.extend(
+		[
+			{"role": message.role, "content": message.content}
+			for message in request.history
+			if message.content.strip()
+		]
+	)
+	messages.append({"role": "user", "content": user_prompt})
+
+	if request.backend == "groq":
+		streamer = stream_groq(messages)
+	elif request.backend == "modal":
+		streamer = stream_modal(messages)
+	else:
+		raise HTTPException(status_code=400, detail='Invalid backend. Use "groq" or "modal".')
+
+	return StreamingResponse(
+		streamer,
+		media_type="text/event-stream",
+		headers={
+			"Cache-Control": "no-cache",
+			"Connection": "keep-alive",
+			"X-Accel-Buffering": "no",
+		},
+	)
 
 
 @app.get("/health")
@@ -254,7 +267,6 @@ async def health() -> dict[str, Any]:
 		"startup_state": startup_state,
 		"vector_store_loaded": vector_store is not None,
 		"chunk_count": vector_store.size if vector_store is not None else 0,
-		"mcp_initialized": bool(getattr(app.state, "mcp_initialized", False)),
 		"startup_error": getattr(app.state, "initialization_error", None),
 	}
 
