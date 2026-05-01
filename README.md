@@ -246,139 +246,320 @@ The tool is intended for use as a research and informational tool only and is no
 
 Choice of calculation tasks chosen from "most popular" calculators list from website of MDCalc Ltd (New York, NY). Used with permission. Inclusion of these calculators does not constitute endorsement by MDCalc.
 
-## TODO
+## Groq Migration
 
-## WhiteBook Groq Migration & Deployment Plan
-**Stack:** FastAPI (Router & Vector Store), Vanilla JS/HTML/CSS (Frontend), Groq (Primary Inference), Modal (Backup Inference).
+This runbook migrates WhiteBook from Modal-hosted generation to Groq-hosted generation, with local FastAPI + frontend during development and a cloud web deployment later.
 
-This document outlines the phased migration to a dual-backend generation strategy and the final deployment steps to publish WhiteBook for public use. It contains manual instructions for the developer and strict, copy-paste prompts for AI coding agents.
+It is intentionally written for two audiences at once:
 
-### Phase 0: Preparation & Accounts (Manual Steps)
+1. A human operator doing account/UI setup.
+2. A coding agent (including small models) implementing code changes safely, phase-by-phase.
 
-Before writing code, establish your cloud API credentials.
+### Important facts from Groq docs (read first)
 
-**1. Groq Setup (Primary)**
-* Go to the [Groq Console](https://console.groq.com).
-* Create an API key named `whitebook-router`.
-* Identify your target model (recommended: `llama-3.1-8b-instant` or `llama3-70b-8192`).
+- Rate limits are org-level, not per-user; you can hit RPM, RPD, TPM, or TPD first.
+- `qwen/qwen3-32b` is currently listed at `RPM 60`, `RPD 1K`, `TPM 6K`, `TPD 500K` in the public table; always verify your exact limits in your Groq limits page because plan and org overrides can differ.
+- On limit exceed, API returns `429` and `retry-after`; other rate headers are always present.
+- Prompt caching is automatic, no extra fee, and cached tokens do not count toward rate limits.
+- Prompt caching currently supports only `openai/gpt-oss-20b`, `openai/gpt-oss-120b`, and `openai/gpt-oss-safeguard-20b`.
+- Because your chosen model is `qwen/qwen3-32b`, prompt caching may not be active yet for your production path. Build the code to be cache-ready anyway, and optionally add a switchable caching-capable model profile later.
 
-**2. Modal Setup (Backup)**
-* Ensure you have a Modal account ([modal.com](https://modal.com)).
-* Install the CLI locally: `pip install modal`
-* Authenticate: `modal setup`
+### Migration strategy
 
-**3. Local Environment Variables**
-Create or update your `.env` file in the root of your repository:
-` ` `env
-GROQ_API_KEY="gsk_your_key_here"
-GROQ_MODEL="llama-3.1-8b-instant"
-MODAL_INFERENCE_URL="We will paste this here after Phase 3"
-` ` `
+Use strict phase gates. Do not proceed to the next phase until the tests for the current phase pass.
 
----
+- Phase 0: Groq console and local environment setup.
+- Phase 1: Backend provider abstraction + Groq streaming integration.
+- Phase 2: Rate-limit handling, retries, and observability.
+- Phase 3: Prompt-structure hardening for cacheability (and optional cache-capable model profile).
+- Phase 4: Frontend validation for unchanged SSE contract.
+- Phase 5: Local production-like hardening.
+- Phase 6: Cloud publish of FastAPI + static frontend.
 
-### Phase 1: The FastAPI Router (Agent Prompt)
+### Phase 0 - Account, project, and environment (human steps)
 
-*Copy and paste this exact prompt into your AI coding assistant (e.g., Gemini Flash, GPT-4o).*
+Goal: Confirm account-level prerequisites and lock environment values before code changes.
 
-> **System Context:** Act as a Lead Backend Python Engineer. We are migrating our FastAPI medical RAG application. The FastAPI server holds a 15MB SQLite database in memory as a NumPy matrix for zero-latency vector search. We need to implement a dual-backend generation routing system.
->
-> **Task:** Update `main.py` and create an LLM routing module.
-> 
-> **1. Groq Client Integration:**
-> * Use the official `groq` async Python SDK. 
-> * Implement an `@retry` decorator using `tenacity` (catch `RateLimitError` and `APIConnectionError`, use exponential backoff with jitter, max 5 attempts).
-> * Write an async generator `stream_groq(messages: list)`. Yield SSE data strings: `yield f"data: {text}\n\n"`.
-> * **Crucial Prompt Injection:** Because Groq runs LLaMA models, inject this directive into the System message to maintain UI compatibility with our Qwen3 setup: `"You must write your internal clinical reasoning inside <think>...</think> tags before providing your final answer."`
->
-> **2. Modal Fallback Integration:**
-> * Write an async generator `stream_modal(messages: list)`.
-> * Use `httpx.AsyncClient` to send a POST request to `os.getenv("MODAL_INFERENCE_URL")` with `stream=True`.
-> * Yield the streaming SSE chunks as they arrive from Modal.
->
-> **3. The `/chat` Endpoint:**
-> * Update the POST `/chat` endpoint to accept a JSON body containing `query`, `history`, and a string parameter `backend` (either `"groq"` or `"modal"`).
-> * Perform the in-memory vector search against the user's query.
-> * Build the final message array (System Prompt + Retrieved Chunks + History + Latest Query).
-> * **Strict Routing:** If `backend == "groq"`, return a `StreamingResponse` using `stream_groq`. If `backend == "modal"`, return a `StreamingResponse` using `stream_modal`. Do NOT automatically failover.
-> 
-> Provide the complete, production-ready Python code with robust error handling.
+1. Open [Groq Console](https://console.groq.com).
+2. Confirm API key exists; rotate and replace if the key was ever pasted in logs/screenshots.
+3. Open limits page in Groq settings and record the actual values for your org.
+4. Confirm `.env` contains:
 
----
+```env
+GROQ_API_KEY="gsk_..."
+GROQ_MODEL="qwen/qwen3-32b"
+```
 
-### Phase 2: Frontend Toggle UI (Agent Prompt)
+5. Keep `.env` out of git; verify `.gitignore` includes it.
+6. If old Modal secrets/URLs exist, keep them temporarily for rollback only; do not remove yet.
 
-*Copy and paste this exact prompt into your AI coding assistant.*
+Phase 0 tests:
 
-> **System Context:** Act as a Frontend Engineer. We are updating the Vanilla HTML/JS/CSS frontend for our medical RAG app. The UI is strictly "minimalist maximalism" (pure black background, white text, SF Pro fonts, pastel orange `#FFB347` accents).
-> 
-> **Task:** Update `index.html`, `style.css`, and `app.js`.
->
-> **1. Backend Toggle Switch:**
-> * Add a sleek, minimalist toggle switch or dropdown near the chat input labeled "Inference Engine".
-> * Options must be: "Groq (Ultra-Fast)" and "Modal Qwen3 (Backup)".
-> * Ensure the selected state is visually clear (use pastel orange for the active state).
->
-> **2. API Request Update:**
-> * Modify the `fetch` call in `app.js` that hits `/chat`. 
-> * Extract the value of the toggle switch and include it in the JSON payload as `"backend": "groq"` or `"backend": "modal"`.
->
-> **3. Streaming Token Parser Validation:**
-> * Ensure the `ReadableStream` parser (`body.getReader()`) correctly splits SSE `data: ` chunks.
-> * Ensure the state machine correctly identifies `<think>` and `</think>` tags, wrapping the text between them in `<span class="reasoning">` (styled as italicized pastel orange).
-> 
-> Provide the complete HTML, CSS, and JS code. Ensure it handles network errors gracefully by displaying a red error message in the chat feed if the selected backend fails.
+- `python -c "import os; from dotenv import load_dotenv; load_dotenv(); assert os.getenv('GROQ_API_KEY'); assert os.getenv('GROQ_MODEL')"`
+- `curl -sS https://api.groq.com/openai/v1/models -H "Authorization: Bearer $GROQ_API_KEY" | jq '.data[].id' | rg "qwen/qwen3-32b"`
 
----
+Pass criteria:
 
-### Phase 3: Modal Backup Deployment (Agent Prompt)
+- API key authenticates.
+- Target model is visible.
+- `.env` is loaded locally.
 
-*Copy and paste this exact prompt into your AI coding assistant.*
+### Phase 1 - Backend Groq integration (coding agent implementation)
 
-> **System Context:** Act as a DevOps Engineer. We need to deploy our backup inference engine to Modal. This app does NOT handle the database or UI; it acts solely as a stateless, GPU-accelerated LLM API.
-> 
-> **Task:** Write the `modal_app.py` deployment script.
-> 
-> **1. Container Image:**
-> * Define a `modal.Image` that installs `llama-cpp-python` with `cuBLAS` enabled for Nvidia GPU acceleration.
-> * Download the `Qwen3-4B-Instruct-Q4_K_M.gguf` weights into the container during the build step.
->
-> **2. Modal App Definition:**
-> * Define a Modal App named `whitebook-inference-backup`.
-> * Create a class `QwenInference` decorated with `@app.cls(gpu="T4", keep_warm=0)`. We want `keep_warm=0` to save money since this is strictly a backup.
-> * In the `@modal.enter()` method, initialize the `Llama` instance with `n_gpu_layers=-1` and `n_ctx=4096`.
->
-> **3. Web Endpoint:**
-> * Define a method decorated with `@modal.web_endpoint(method="POST")`.
-> * It must accept a JSON payload of `messages`.
-> * It must format the messages using the Qwen ChatML template.
-> * It must return a FastAPI `StreamingResponse` that yields Server-Sent Events (SSE) from the `llama.cpp` generator.
->
-> Provide the complete `modal_app.py` script. Include the terminal command required to deploy this app.
+Goal: Replace generation calls with Groq while preserving retrieval and SSE behavior.
 
-*Manual Step after Agent Completion:*
-Run the deployment command (`modal deploy modal_app.py`). Modal will output a live web URL (e.g., `https://yourname--whitebook-inference-backup-web.modal.run`). Copy this URL and paste it into your `.env` file as `MODAL_INFERENCE_URL`.
+Required code outcomes:
 
----
+- Create a provider module (for example `app/providers/groq_provider.py`) that owns all Groq API calls.
+- Keep retrieval logic in existing backend modules; only the generation provider changes.
+- Preserve SSE output contract used by `static/app.js` so frontend behavior does not regress.
+- Centralize prompt assembly so message order is deterministic and testable.
+- Put static system instructions first and user/session content last.
 
-### Phase 4: Public Deployment (Manual Steps)
+Copy/paste prompt for coding agent:
 
-To share WhiteBook with other clinicians, you must deploy the main FastAPI Router. Since the heavy AI generation is offloaded to Groq and Modal, your router only needs ~1GB of RAM to hold the 15MB SQLite database and handle web traffic.
+```text
+Act as a senior Python/FastAPI migration engineer. Update this project to use Groq as the primary generation backend without changing retrieval behavior.
 
-**1. Prepare the Repository:**
-* Ensure your `staffbook_kb.sqlite`, `ios_images` folder, `main.py`, `requirements.txt`, and `static` folder are committed to a GitHub repository.
-* Ensure `.env` is listed in your `.gitignore` file. Never commit API keys.
+Constraints:
+- Keep API route paths stable unless already versioned.
+- Keep SSE response framing stable so current frontend stream parser still works.
+- Read GROQ_API_KEY and GROQ_MODEL from environment.
+- Add/update dependencies required by Groq client usage.
+- Keep code modular: provider file for Groq calls, no monolithic edits.
 
-**2. Choose a Hosting Platform (Render or Railway):**
-* Create an account on [Render.com](https://render.com) (easiest for FastAPI) or [Railway.app](https://railway.app).
-* Create a new "Web Service" and connect it to your GitHub repository.
+Implementation tasks:
+1) Create a Groq provider module with:
+   - a function to build chat completion request payloads
+   - a streaming function that yields SSE-compatible chunks
+   - explicit timeout and error mapping for upstream failures
+2) Wire FastAPI chat endpoint to call the Groq provider.
+3) Ensure retrieval chunks are still injected into the prompt.
+4) Ensure system message remains stable across turns.
+5) Add minimal unit tests for:
+   - payload construction order
+   - error mapping behavior
+   - stream chunk formatting
+6) Do not add Modal fallback logic in this migration.
 
-**3. Configure the Deployment:**
-* **Build Command:** `pip install -r requirements.txt`
-* **Start Command:** `uvicorn main:app --host 0.0.0.0 --port $PORT`
-* **Environment Variables:** Add `GROQ_API_KEY` and `MODAL_INFERENCE_URL` in the hosting dashboard's secrets manager. 
+Deliverable:
+- Production-ready code edits + tests.
+- A short test command list to verify locally.
+```
 
-**4. Go Live:**
-* Deploy the service.
-* Render/Railway will automatically provision an SSL certificate and provide a public HTTPS URL (e.g., `https://whitebook-router.onrender.com`).
-* You can now access WhiteBook from any iPhone or hospital computer instantly. If Groq rate limits are hit during heavy usage, instruct users to tap the "Modal Qwen3" toggle to switch to the dedicated GPU backup.
+Phase 1 tests:
+
+- Run backend tests.
+- Start app locally and run one chat request end-to-end.
+- Confirm streamed tokens render continuously in UI (not batch at end).
+
+Pass criteria:
+
+- Chat endpoint returns valid SSE stream from Groq.
+- Retrieval augmentation still appears in answers.
+- No Modal dependency remains on main generation path.
+
+### Phase 2 - Rate-limit resilience and telemetry (coding + human verification)
+
+Goal: Make the app robust against `429` and transient failures.
+
+Required code outcomes:
+
+- Retry policy for transient failures with capped exponential backoff and jitter.
+- Special-case `429` using `retry-after` when available.
+- Log and surface rate-limit headers:
+  - `x-ratelimit-limit-requests`
+  - `x-ratelimit-remaining-requests`
+  - `x-ratelimit-limit-tokens`
+  - `x-ratelimit-remaining-tokens`
+  - `x-ratelimit-reset-requests`
+  - `x-ratelimit-reset-tokens`
+- Return user-friendly error text when retries exhausted.
+- Never leak API keys in logs/errors.
+
+Copy/paste prompt for coding agent:
+
+```text
+Harden Groq API handling for production.
+
+Implement:
+1) Retry wrapper for transient failures and rate limiting.
+2) On HTTP 429, parse retry-after and sleep that duration before retrying.
+3) Attach selected x-ratelimit-* header values to structured logs.
+4) Add a small helper that converts provider exceptions into user-safe FastAPI errors.
+5) Add tests that mock:
+   - success
+   - repeated 429 then success
+   - repeated 429 then final failure
+   - timeout/network error
+
+Do not change endpoint contracts.
+Do not expose secrets in logs.
+```
+
+Phase 2 tests:
+
+- Synthetic test with mocked `429` verifies backoff behavior.
+- Confirm logs include rate-limit metadata keys.
+- Confirm client receives stable error shape when retries fail.
+
+Pass criteria:
+
+- No crash loops on throttling.
+- Actionable observability exists for debugging quota pressure.
+
+### Phase 3 - Prompt caching readiness and model policy (coding + product decision)
+
+Goal: Structure prompts for maximum cacheability and explicitly handle your chosen model policy.
+
+Decision gate:
+
+- If you must stay on `qwen/qwen3-32b`, keep cache-ready prompt design and track `cached_tokens` for future support rollout.
+- If you want prompt-caching benefit now, add optional model switch to a supported model (`openai/gpt-oss-20b` or `openai/gpt-oss-120b`) for selected routes or environments.
+
+Required code outcomes:
+
+- Stable static prefix:
+  - system instructions
+  - tool definitions (if used)
+  - fixed schemas/examples
+- Dynamic suffix:
+  - user query
+  - per-request metadata
+  - volatile timestamps/IDs
+- Capture and log `usage.prompt_tokens_details.cached_tokens` when present.
+- Add a feature flag/env for optional alternate model profile.
+
+Copy/paste prompt for coding agent:
+
+```text
+Optimize prompt assembly for Groq prompt-caching compatibility and add instrumentation.
+
+Tasks:
+1) Refactor prompt builder so static sections always come first and remain byte-stable between requests.
+2) Ensure dynamic session/user data is appended after static sections.
+3) Parse usage payload and log prompt_tokens plus cached_tokens if available.
+4) Add env-based optional model override for cache-capable models, while preserving GROQ_MODEL default.
+5) Add tests that verify exact-prefix stability across turns.
+
+Important:
+- Keep behavior unchanged for qwen/qwen3-32b default.
+- Do not introduce schema-breaking API changes.
+```
+
+Phase 3 tests:
+
+- Multi-turn local test using same system prompt and different user turns.
+- Validate usage logging path handles missing `cached_tokens` gracefully.
+- If using a supported model in staging, verify cache hit rate rises on repeated prefix calls.
+
+Pass criteria:
+
+- Prompt order is deterministic.
+- Cache telemetry exists.
+- Model policy is explicit and configurable.
+
+### Phase 4 - Frontend compatibility check (coding agent + manual QA)
+
+Goal: Confirm no UI regression from backend migration.
+
+Required outcomes:
+
+- Existing `/api/chat` request and SSE parsing still work.
+- Error states render clearly when provider throttles/fails.
+- Optional small UI hint showing current provider/model (from health/config endpoint).
+
+Copy/paste prompt for coding agent:
+
+```text
+Validate and patch frontend compatibility after backend Groq migration.
+
+Tasks:
+1) Confirm stream parser handles tokenized SSE chunks exactly as emitted by backend.
+2) Improve client-side error display for provider timeouts/429 exhaustion.
+3) Add lightweight model/provider indicator in UI if a config endpoint exists.
+4) Do not redesign styling or alter chat UX flow.
+```
+
+Phase 4 tests:
+
+- Manual browser test: first token appears quickly and continues streaming.
+- Manual error injection test: verify user sees readable fallback message.
+- No console errors in browser devtools during normal chat.
+
+Pass criteria:
+
+- Chat UX remains smooth.
+- Error handling is understandable to end users.
+
+### Phase 5 - Local release candidate checklist
+
+Goal: Freeze a reliable local build before cloud deployment.
+
+Checklist:
+
+1. Run full test suite.
+2. Run lints/format checks.
+3. Verify `/health` includes provider/model status without secrets.
+4. Run 20 sequential chat smoke requests and confirm no memory blow-up.
+5. Run small burst concurrency test and inspect throttling behavior.
+6. Confirm README and `.env.example` (if present) reflect Groq-first setup.
+
+Suggested smoke commands:
+
+```bash
+.venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+curl -sS http://localhost:8000/health | jq
+curl -N -X POST "http://localhost:8000/api/chat" -H "Content-Type: application/json" -d '{"query":"What is SVT?","history":[]}'
+```
+
+Pass criteria:
+
+- Stable local behavior for single and burst traffic.
+- Clear operational signals for rate limiting and provider failures.
+
+### Phase 6 - Publish to website (human + coding agent)
+
+Goal: Deploy FastAPI + static frontend publicly with secure secret handling.
+
+Platform options:
+
+- Render, Railway, Fly.io, or any container host supporting environment secrets and HTTPS.
+
+Deployment steps:
+
+1. Push migration code to Git provider.
+2. Create web service and set build/start commands.
+3. Add secrets in host dashboard:
+   - `GROQ_API_KEY`
+   - `GROQ_MODEL`
+4. Set production-safe worker/timeouts for streaming endpoints.
+5. Deploy and test `/health` + one full chat stream.
+6. Enable log retention/alerts for repeated `429` and upstream failures.
+
+Production tests:
+
+- Real browser session on public URL.
+- Verify SSE streaming survives reverse proxy.
+- Verify throttling path returns user-safe errors.
+- Verify no secret appears in logs.
+
+Pass criteria:
+
+- Public HTTPS app functions end-to-end.
+- Rate-limit events are observable and recover gracefully.
+
+### MCP and Groq tooling notes
+
+- You do not need an MCP server to call Groq chat completions; direct API integration is simplest and lowest risk.
+- Groq supports tool-use patterns; keep your existing server-side tools callable through normal chat completion/tool schema flows.
+- If you add MCP later, treat it as a separate project after Groq migration is stable.
+
+### Rollback plan
+
+If any phase fails and cannot be fixed quickly:
+
+1. Revert to last known good commit.
+2. Restore previous provider wiring.
+3. Keep Groq code on feature branch for iterative repair.
+4. Re-run Phase 1 through Phase 3 tests before reattempting release.
