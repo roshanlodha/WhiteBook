@@ -32,7 +32,87 @@ struct GroqService {
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    func complete(userQuestion: String, context: [RetrievedChunk]) async throws -> String {
+    func complete(
+        userQuestion: String,
+        context: [RetrievedChunk],
+        toolsMode: Bool,
+        thinkingMode: Bool
+    ) async throws -> String {
+        var combined = ""
+        for try await token in streamCompletion(
+            userQuestion: userQuestion,
+            context: context,
+            toolsMode: toolsMode,
+            thinkingMode: thinkingMode
+        ) {
+            combined += token
+        }
+        let trimmed = combined.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            throw GroqServiceError.invalidResponse
+        }
+        return trimmed
+    }
+
+    func streamCompletion(
+        userQuestion: String,
+        context: [RetrievedChunk],
+        toolsMode: Bool,
+        thinkingMode: Bool
+    ) -> AsyncThrowingStream<String, Error> {
+        AsyncThrowingStream { continuation in
+            Task {
+                do {
+                    var request = try makeChatRequest(
+                        userQuestion: userQuestion,
+                        context: context,
+                        toolsMode: toolsMode,
+                        thinkingMode: thinkingMode,
+                        stream: true
+                    )
+                    request.timeoutInterval = 120
+                    let (bytes, response) = try await URLSession.shared.bytes(for: request)
+                    guard let httpResponse = response as? HTTPURLResponse else {
+                        throw GroqServiceError.invalidResponse
+                    }
+                    guard (200...299).contains(httpResponse.statusCode) else {
+                        var data = Data()
+                        for try await byte in bytes {
+                            data.append(byte)
+                        }
+                        let apiError = try? JSONDecoder().decode(GroqErrorEnvelope.self, from: data)
+                        throw GroqServiceError.upstreamError(
+                            apiError?.error.message ?? "Groq request failed with status \(httpResponse.statusCode)."
+                        )
+                    }
+
+                    for try await line in bytes.lines {
+                        guard line.hasPrefix("data:") else { continue }
+                        let payload = String(line.dropFirst(5)).trimmingCharacters(in: .whitespaces)
+                        if payload == "[DONE]" {
+                            break
+                        }
+                        guard let data = payload.data(using: .utf8) else { continue }
+                        let chunk = try? JSONDecoder().decode(ChatCompletionChunk.self, from: data)
+                        if let content = chunk?.choices.first?.delta.content, !content.isEmpty {
+                            continuation.yield(content)
+                        }
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+        }
+    }
+
+    private func makeChatRequest(
+        userQuestion: String,
+        context: [RetrievedChunk],
+        toolsMode: Bool,
+        thinkingMode: Bool,
+        stream: Bool
+    ) throws -> URLRequest {
         let endpoint = URL(string: "https://api.groq.com/openai/v1/chat/completions")!
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
@@ -43,28 +123,21 @@ struct GroqService {
         let body = ChatCompletionsRequest(
             model: model,
             messages: [
-                .init(role: "system", content: Self.systemPrompt),
+                .init(
+                    role: "system",
+                    content: Self.systemPrompt(
+                        toolsMode: toolsMode,
+                        thinkingMode: thinkingMode
+                    )
+                ),
                 .init(role: "user", content: prompt)
             ],
-            temperature: 0.2
+            temperature: 0.2,
+            stream: stream
         )
 
         request.httpBody = try JSONEncoder().encode(body)
-        let (data, response) = try await URLSession.shared.data(for: request)
-
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw GroqServiceError.invalidResponse
-        }
-        guard (200...299).contains(httpResponse.statusCode) else {
-            let apiError = try? JSONDecoder().decode(GroqErrorEnvelope.self, from: data)
-            throw GroqServiceError.upstreamError(apiError?.error.message ?? "Groq request failed with status \(httpResponse.statusCode).")
-        }
-
-        let decoded = try JSONDecoder().decode(ChatCompletionsResponse.self, from: data)
-        guard let text = decoded.choices.first?.message.content?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else {
-            throw GroqServiceError.invalidResponse
-        }
-        return text
+        return request
     }
 
     private static func makeContextPrompt(userQuestion: String, chunks: [RetrievedChunk]) -> String {
@@ -94,17 +167,42 @@ struct GroqService {
         """
     }
 
-    private static let systemPrompt = """
-    You are WhiteBook, an assistant that answers by prioritizing retrieved MGH WhiteBook excerpts.
-    If context is partial or missing, state that clearly and provide a concise best-effort response.
-    Keep responses brief, actionable, and in Markdown.
-    """
+    private static func systemPrompt(toolsMode: Bool, thinkingMode: Bool) -> String {
+        var sections: [String] = [
+            "You are WhiteBook, an assistant that answers by prioritizing retrieved MGH WhiteBook excerpts.",
+            "If context is partial or missing, state that clearly and provide a concise best-effort response.",
+            """
+            Formatting rules for every answer:
+            - Use clean Markdown with short sections and blank lines between sections.
+            - When listing differential diagnoses, causes, or steps, use bullet points (one item per line).
+            - Never output run-on lists or glued words; include normal spacing and punctuation.
+            - Prefer this structure: concise answer first, then key considerations, then next steps if relevant.
+            """
+        ]
+
+        if toolsMode {
+            sections.append(
+                "Calculator tooling is unavailable in this iOS build; if numeric reasoning is requested, provide careful manual calculations and clearly mark any assumptions."
+            )
+        }
+
+        if thinkingMode {
+            sections.append(
+                "Add any intermediate reasoning inside <think>...</think> tags. Put only the final user-facing answer outside these tags."
+            )
+        } else {
+            sections.append("Do not emit <think> tags unless explicitly requested by the user.")
+        }
+
+        return sections.joined(separator: "\n")
+    }
 }
 
 private struct ChatCompletionsRequest: Encodable {
     let model: String
     let messages: [ChatCompletionMessage]
     let temperature: Double
+    let stream: Bool
 }
 
 private struct ChatCompletionMessage: Codable {
@@ -117,6 +215,18 @@ private struct ChatCompletionsResponse: Decodable {
 
     struct Choice: Decodable {
         let message: ChatCompletionMessage
+    }
+}
+
+private struct ChatCompletionChunk: Decodable {
+    let choices: [Choice]
+
+    struct Choice: Decodable {
+        let delta: Delta
+    }
+
+    struct Delta: Decodable {
+        let content: String?
     }
 }
 

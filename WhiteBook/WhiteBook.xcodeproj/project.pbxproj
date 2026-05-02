@@ -6,6 +6,10 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		50B847162FA63FDA005CE94A /* Markdown in Frameworks */ = {isa = PBXBuildFile; productRef = 50B847152FA63FDA005CE94A /* Markdown */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
 		50B840432FA6353D005CE94A /* WhiteBook.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = WhiteBook.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -23,6 +27,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				50B847162FA63FDA005CE94A /* Markdown in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -65,6 +70,7 @@
 			);
 			name = WhiteBook;
 			packageProductDependencies = (
+				50B847152FA63FDA005CE94A /* Markdown */,
 			);
 			productName = WhiteBook;
 			productReference = 50B840432FA6353D005CE94A /* WhiteBook.app */;
@@ -95,6 +101,7 @@
 			mainGroup = 50B8403A2FA6353D005CE94A;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
+				50B847142FA63FDA005CE94A /* XCRemoteSwiftPackageReference "swift-markdown" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 50B840442FA6353D005CE94A /* Products */;
@@ -255,9 +262,10 @@
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
-				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_GROQ_API_KEY = "";
-				INFOPLIST_KEY_GROQ_MODEL = "qwen/qwen3-32b";
+				GENERATE_INFOPLIST_FILE = NO;
+				GROQ_API_KEY = "";
+				GROQ_MODEL = "llama-3.3-70b-versatile";
+				INFOPLIST_FILE = Info.plist;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.medical";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
@@ -300,9 +308,10 @@
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
-				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_GROQ_API_KEY = "";
-				INFOPLIST_KEY_GROQ_MODEL = "qwen/qwen3-32b";
+				GENERATE_INFOPLIST_FILE = NO;
+				GROQ_API_KEY = "";
+				GROQ_MODEL = "llama-3.3-70b-versatile";
+				INFOPLIST_FILE = Info.plist;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.medical";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
@@ -355,6 +364,25 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		50B847142FA63FDA005CE94A /* XCRemoteSwiftPackageReference "swift-markdown" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/swiftlang/swift-markdown";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.7.3;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		50B847152FA63FDA005CE94A /* Markdown */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 50B847142FA63FDA005CE94A /* XCRemoteSwiftPackageReference "swift-markdown" */;
+			productName = Markdown;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 50B8403B2FA6353D005CE94A /* Project object */;
 }
