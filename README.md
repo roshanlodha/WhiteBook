@@ -85,6 +85,7 @@ If the machine is fully offline, pre-populate the Hugging Face cache before star
 
 - Retrieval source images are only returned when files exist under `images/`.
 - This repository no longer includes Modal or local `llama.cpp` generation paths.
+- Groq free-tier TPM limits can be too small for tool-calling mode on some models. If you see tool-call limit errors, disable Calculate mode or use a higher-limit model/tier.
 
 ## License
 

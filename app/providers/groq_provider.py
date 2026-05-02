@@ -35,9 +35,11 @@ DEFAULT_GROQ_MODEL = "qwen/qwen3-32b"
 DEFAULT_GROQ_TIMEOUT_SECONDS = 60.0
 MAX_TOOL_ROUNDS = 4
 MAX_PROMPT_TOKENS = 24_000
+MAX_PROMPT_TOKENS_WITH_TOOLS = 4_800
 MAX_TOOL_RESULT_CHARS = 1_800
 DEFAULT_TEMPERATURE = 0.1
 DEFAULT_MAX_OUTPUT_TOKENS = 1_400
+TOOL_CALL_MAX_OUTPUT_TOKENS = 320
 
 ToolExecutor = Callable[[str, dict[str, Any]], Awaitable[Any]]
 
@@ -67,6 +69,11 @@ class GroqUpstreamTimeoutError(GroqProviderError):
 class GroqPayloadTooLargeError(GroqProviderError):
 	status_code = 413
 	error_type = "payload_too_large"
+
+
+class GroqToolingTierLimitError(GroqProviderError):
+	status_code = 400
+	error_type = "tooling_not_supported_by_hosting_tier"
 
 
 def build_chat_payload(*, model: str, messages: list[dict[str, str]], temperature: float = DEFAULT_TEMPERATURE) -> dict[str, Any]:
@@ -332,26 +339,36 @@ async def stream_chat(
 	# Disable SDK-level automatic retries so 429s surface immediately and the
 	# frontend can offer explicit user-controlled retry.
 	client = AsyncGroq(api_key=api_key, timeout=DEFAULT_GROQ_TIMEOUT_SECONDS, max_retries=0)
+	base_budget = MAX_PROMPT_TOKENS_WITH_TOOLS if tools else MAX_PROMPT_TOKENS
 	conversation: list[dict[str, Any]] = _trim_to_budget(
 		[dict(message) for message in messages],
 		tools,
-		MAX_PROMPT_TOKENS,
+		base_budget,
 	)
 
 	final_answer_emitted = False
 	try:
 		if tools and tool_executor:
 			for _tool_round in range(MAX_TOOL_ROUNDS):
-				conversation = _trim_to_budget(conversation, tools, MAX_PROMPT_TOKENS)
-				completion = await client.chat.completions.create(
-					model=model,
-					messages=conversation,
-					tools=tools,
-					tool_choice="auto",
-					stream=False,
-					temperature=DEFAULT_TEMPERATURE,
-					max_tokens=DEFAULT_MAX_OUTPUT_TOKENS,
-				)
+				conversation = _trim_to_budget(conversation, tools, MAX_PROMPT_TOKENS_WITH_TOOLS)
+				try:
+					completion = await client.chat.completions.create(
+						model=model,
+						messages=conversation,
+						tools=tools,
+						tool_choice="auto",
+						stream=False,
+						temperature=DEFAULT_TEMPERATURE,
+						max_tokens=TOOL_CALL_MAX_OUTPUT_TOKENS,
+					)
+				except RateLimitError as exc:
+					# Free/on-demand tiers can reject tool-mode requests due TPM pressure.
+					# Surface this as a stable product-level limitation message instead of
+					# a generic "retry after N seconds" loop.
+					raise GroqToolingTierLimitError(
+						"Current hosting provider/tier does not support tool calling for this request size. "
+						"Turn off Calculate mode or switch to a higher-limit model/tier."
+					) from exc
 				assistant_message = completion.choices[0].message
 				tool_calls = assistant_message.tool_calls or []
 
