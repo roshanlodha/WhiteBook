@@ -97,7 +97,8 @@ struct ParsedAssistantContent {
             }
         }
 
-        let answerText = answer.trimmingCharacters(in: .whitespacesAndNewlines)
+        var answerText = answer.trimmingCharacters(in: .whitespacesAndNewlines)
+        answerText = answerText.replacingOccurrences(of: #"^#+\s*(?:\*\*)?(?:Answer)?(?:\*\*)?\s*"#, with: "", options: .regularExpression).trimmingCharacters(in: .whitespacesAndNewlines)
         let thinkText = think.trimmingCharacters(in: .whitespacesAndNewlines)
         let trailingTool = currentTool.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trailingTool.isEmpty {

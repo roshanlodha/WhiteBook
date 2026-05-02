@@ -40,13 +40,24 @@ struct LocalKnowledgeBase {
         }
         defer { sqlite3_close(db) }
 
-        // Lightweight lexical retrieval that stays fully local on-device.
+        // Tokenize query for better text matching
+        let words = trimmed.components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { $0.count > 2 }
+            .map { $0.lowercased() }
+        let searchWords = words.isEmpty ? [trimmed.lowercased()] : words
+
+        var scoreSelects: [String] = []
+        var whereClauses: [String] = []
+        for _ in searchWords {
+            scoreSelects.append("((CASE WHEN lower(text_content) LIKE '%' || ? || '%' THEN 2 ELSE 0 END) + (CASE WHEN lower(heading_context) LIKE '%' || ? || '%' THEN 1 ELSE 0 END))")
+            whereClauses.append("(lower(text_content) LIKE '%' || ? || '%' OR lower(heading_context) LIKE '%' || ? || '%')")
+        }
+
         let sql = """
         SELECT id, heading_context, text_content, page_start, page_end, image_filename,
-               ((CASE WHEN lower(text_content) LIKE '%' || lower(?) || '%' THEN 2 ELSE 0 END) +
-                (CASE WHEN lower(heading_context) LIKE '%' || lower(?) || '%' THEN 1 ELSE 0 END)) AS score
+               (\(scoreSelects.joined(separator: " + "))) AS score
         FROM chunks
-        WHERE lower(text_content) LIKE '%' || lower(?) || '%' OR lower(heading_context) LIKE '%' || lower(?) || '%'
+        WHERE \(whereClauses.joined(separator: " OR "))
         ORDER BY score DESC, rowid DESC
         LIMIT ?
         """
@@ -57,11 +68,15 @@ struct LocalKnowledgeBase {
         }
         defer { sqlite3_finalize(stmt) }
 
-        sqlite3_bind_text(stmt, 1, (trimmed as NSString).utf8String, -1, SQLITE_TRANSIENT)
-        sqlite3_bind_text(stmt, 2, (trimmed as NSString).utf8String, -1, SQLITE_TRANSIENT)
-        sqlite3_bind_text(stmt, 3, (trimmed as NSString).utf8String, -1, SQLITE_TRANSIENT)
-        sqlite3_bind_text(stmt, 4, (trimmed as NSString).utf8String, -1, SQLITE_TRANSIENT)
-        sqlite3_bind_int(stmt, 5, Int32(limit))
+        var bindIndex: Int32 = 1
+        for word in searchWords {
+            sqlite3_bind_text(stmt, bindIndex, (word as NSString).utf8String, -1, SQLITE_TRANSIENT)
+            sqlite3_bind_text(stmt, bindIndex + 1, (word as NSString).utf8String, -1, SQLITE_TRANSIENT)
+            sqlite3_bind_text(stmt, bindIndex + 2, (word as NSString).utf8String, -1, SQLITE_TRANSIENT)
+            sqlite3_bind_text(stmt, bindIndex + 3, (word as NSString).utf8String, -1, SQLITE_TRANSIENT)
+            bindIndex += 4
+        }
+        sqlite3_bind_int(stmt, bindIndex, Int32(limit))
 
         var rows: [RetrievedChunk] = []
         while sqlite3_step(stmt) == SQLITE_ROW {

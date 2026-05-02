@@ -31,7 +31,7 @@ struct PDFPageDetailView: View {
     }
 }
 
-private struct PDFKitView: UIViewRepresentable {
+struct PDFKitView: UIViewRepresentable {
     let pageNumber: Int
 
     func makeUIView(context: Context) -> PDFView {

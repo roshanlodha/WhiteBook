@@ -217,7 +217,9 @@ private struct SourcesButton: View {
             HStack(spacing: 8) {
                 Image(systemName: "doc.text.magnifyingglass")
                     .font(.system(size: 14, weight: .semibold))
-                Text("Show Sources (\(sources.count))")
+                let pages = Array(Set(sources.compactMap { $0.pageStart })).sorted()
+                let pagesText = pages.isEmpty ? "" : " (p. \(pages.map { String($0) }.joined(separator: ", ")))"
+                Text("Show Source\(pagesText)")
                     .font(.system(size: 14, weight: .semibold))
                 Spacer()
                 Image(systemName: "chevron.right")
@@ -241,37 +243,75 @@ private struct SourcesButton: View {
     }
 }
 
-// MARK: - Sources Sheet (full modal with PDF pages)
+// MARK: - Sources Sheet (Direct PDF Viewer)
 
 private struct SourcesSheet: View {
     let sources: [RetrievedChunk]
+    @State private var currentIndex = 0
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                LazyVStack(spacing: 16) {
-                    ForEach(Array(sources.enumerated()), id: \.element.id) { index, source in
-                        NavigationLink {
-                            if let pageNumber = source.pageStart {
-                                PDFPageDetailView(pageNumber: pageNumber)
-                            } else {
-                                Text("No page number available for this source.")
-                                    .padding()
-                            }
-                        } label: {
-                            SourceRow(source: source, index: index + 1)
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(source.pageStart == nil)
-                        .opacity(source.pageStart == nil ? 0.7 : 1.0)
+            VStack(spacing: 0) {
+                let currentSource = sources.isEmpty ? nil : sources[currentIndex]
+
+                if let pageNumber = currentSource?.pageStart {
+                    PDFKitView(pageNumber: pageNumber)
+                        .id(pageNumber)
+                } else {
+                    VStack(spacing: 12) {
+                        Image(systemName: "doc.text")
+                            .font(.system(size: 48))
+                            .foregroundStyle(.tertiary)
+                        Text("No page available for this source.")
+                            .foregroundStyle(.secondary)
                     }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(AppTheme.background(for: colorScheme))
                 }
-                .padding()
+
+                if sources.count > 1 {
+                    Divider()
+                    HStack {
+                        Button {
+                            withAnimation { currentIndex -= 1 }
+                        } label: {
+                            Image(systemName: "chevron.left")
+                                .font(.system(size: 16, weight: .semibold))
+                                .frame(width: 44, height: 44)
+                        }
+                        .disabled(currentIndex == 0)
+
+                        Spacer()
+
+                        VStack(spacing: 2) {
+                            Text("Source \(currentIndex + 1) of \(sources.count)")
+                                .font(.system(size: 13, weight: .semibold))
+                            if let pageStart = currentSource?.pageStart {
+                                Text("Page \(pageStart)")
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+
+                        Spacer()
+
+                        Button {
+                            withAnimation { currentIndex += 1 }
+                        } label: {
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 16, weight: .semibold))
+                                .frame(width: 44, height: 44)
+                        }
+                        .disabled(currentIndex == sources.count - 1)
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .background(AppTheme.metaBlockBackground(for: colorScheme))
+                }
             }
-            .background(AppTheme.background(for: colorScheme))
-            .navigationTitle("Sources")
+            .navigationTitle(sources.count <= 1 ? "Source Document" : "Source Viewer")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
@@ -279,81 +319,6 @@ private struct SourcesSheet: View {
                 }
             }
         }
-    }
-}
-
-// MARK: - Source Row (in the sources sheet)
-
-private struct SourceRow: View {
-    let source: RetrievedChunk
-    let index: Int
-    @Environment(\.colorScheme) private var colorScheme
-
-    var body: some View {
-        HStack(spacing: 14) {
-            // PDF thumbnail
-            if let pageNumber = source.pageStart {
-                PDFThumbnailView(pageNumber: pageNumber)
-                    .frame(width: 70, height: 90)
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
-                    .shadow(color: .black.opacity(0.1), radius: 2, y: 1)
-            } else {
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(AppTheme.metaBlockBackground(for: colorScheme))
-                    .frame(width: 70, height: 90)
-                    .overlay {
-                        Image(systemName: "doc.text")
-                            .foregroundStyle(.secondary)
-                    }
-            }
-
-            VStack(alignment: .leading, spacing: 6) {
-                HStack {
-                    Text("Source \(index)")
-                        .font(.system(size: 13, weight: .bold))
-
-                    Spacer()
-
-                    if let pageStart = source.pageStart {
-                        if let pageEnd = source.pageEnd, pageEnd != pageStart {
-                            Text("pp. \(pageStart)–\(pageEnd)")
-                                .font(.system(size: 12, weight: .medium))
-                                .foregroundStyle(.secondary)
-                        } else {
-                            Text("p. \(pageStart)")
-                                .font(.system(size: 12, weight: .medium))
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                }
-
-                if let heading = source.headingContext, !heading.isEmpty {
-                    Text(heading)
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(.primary)
-                        .lineLimit(2)
-                }
-
-                Text(source.textContent)
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(3)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-
-            if source.pageStart != nil {
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.tertiary)
-            }
-        }
-        .padding(12)
-        .background(AppTheme.sourceCardBackground(for: colorScheme))
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-        .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(AppTheme.sourceButtonBorder(for: colorScheme), lineWidth: 0.5)
-        )
     }
 }
 
