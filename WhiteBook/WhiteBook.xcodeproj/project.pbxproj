@@ -7,7 +7,6 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		50B847162FA63FDA005CE94A /* Markdown in Frameworks */ = {isa = PBXBuildFile; productRef = 50B847152FA63FDA005CE94A /* Markdown */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -27,7 +26,6 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				50B847162FA63FDA005CE94A /* Markdown in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -70,7 +68,6 @@
 			);
 			name = WhiteBook;
 			packageProductDependencies = (
-				50B847152FA63FDA005CE94A /* Markdown */,
 			);
 			productName = WhiteBook;
 			productReference = 50B840432FA6353D005CE94A /* WhiteBook.app */;
@@ -101,7 +98,6 @@
 			mainGroup = 50B8403A2FA6353D005CE94A;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
-				50B847142FA63FDA005CE94A /* XCRemoteSwiftPackageReference "swift-markdown" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 50B840442FA6353D005CE94A /* Products */;
@@ -264,6 +260,7 @@
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = NO;
 				GROQ_API_KEY = "";
+				"GROQ_API_KEY[arch=*]" = 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;
 				GROQ_MODEL = "llama-3.3-70b-versatile";
 				INFOPLIST_FILE = Info.plist;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.medical";
@@ -310,6 +307,7 @@
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = NO;
 				GROQ_API_KEY = "";
+				"GROQ_API_KEY[arch=*]" = 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;
 				GROQ_MODEL = "llama-3.3-70b-versatile";
 				INFOPLIST_FILE = Info.plist;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.medical";
@@ -365,24 +363,7 @@
 		};
 /* End XCConfigurationList section */
 
-/* Begin XCRemoteSwiftPackageReference section */
-		50B847142FA63FDA005CE94A /* XCRemoteSwiftPackageReference "swift-markdown" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/swiftlang/swift-markdown";
-			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 0.7.3;
-			};
-		};
-/* End XCRemoteSwiftPackageReference section */
 
-/* Begin XCSwiftPackageProductDependency section */
-		50B847152FA63FDA005CE94A /* Markdown */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 50B847142FA63FDA005CE94A /* XCRemoteSwiftPackageReference "swift-markdown" */;
-			productName = Markdown;
-		};
-/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 50B8403B2FA6353D005CE94A /* Project object */;
 }

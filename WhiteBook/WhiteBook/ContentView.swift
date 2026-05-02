@@ -7,9 +7,6 @@
 
 import SwiftUI
 import UIKit
-#if canImport(Markdown)
-import Markdown
-#endif
 
 struct ContentView: View {
     @StateObject private var viewModel = ChatViewModel()
@@ -128,6 +125,8 @@ struct ContentView: View {
     }
 }
 
+// MARK: - Message Bubble
+
 private struct MessageBubble: View {
     let message: ChatMessage
     @Environment(\.colorScheme) private var colorScheme
@@ -157,11 +156,13 @@ private struct MessageBubble: View {
                     CollapsibleMetaBlock(title: "calculating...", content: toolResult)
                 }
 
-                MarkdownMessageView(text: message.text)
-                    .padding(14)
+                RichMarkdownBubble(text: message.text)
                     .frame(maxWidth: 680, alignment: .leading)
-                    .background(AppTheme.assistantBubbleBackground(for: colorScheme))
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
+
+                if !message.sources.isEmpty {
+                    SourcesButton(sources: message.sources)
+                        .frame(maxWidth: 680, alignment: .leading)
+                }
             } else {
                 HStack {
                     Spacer(minLength: 36)
@@ -175,25 +176,82 @@ private struct MessageBubble: View {
                         .clipShape(RoundedRectangle(cornerRadius: 14))
                 }
             }
-
-            if message.role == .assistant, !message.sources.isEmpty {
-                CollapsibleSourcesBlock(sources: message.sources)
-                    .frame(maxWidth: 680, alignment: .leading)
-            }
         }
         .padding(.bottom, 18)
     }
 }
 
-private struct CollapsibleSourcesBlock: View {
-    let sources: [RetrievedChunk]
-    @State private var isExpanded = false
+// MARK: - Rich Markdown Bubble (WKWebView-backed)
+
+private struct RichMarkdownBubble: View {
+    let text: String
+    @State private var webViewHeight: CGFloat = 60
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        DisclosureGroup(isExpanded: $isExpanded) {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
+        let normalized = MarkdownNormalizer.normalize(text)
+        MarkdownWebView(
+            markdown: normalized,
+            colorScheme: colorScheme,
+            dynamicHeight: $webViewHeight
+        )
+        .frame(height: max(webViewHeight, 20))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .padding(14)
+        .background(AppTheme.assistantBubbleBackground(for: colorScheme))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+    }
+}
+
+// MARK: - Sources Button (prominent, always visible)
+
+private struct SourcesButton: View {
+    let sources: [RetrievedChunk]
+    @State private var showSourceSheet = false
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        Button {
+            showSourceSheet = true
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "doc.text.magnifyingglass")
+                    .font(.system(size: 14, weight: .semibold))
+                Text("Show Sources (\(sources.count))")
+                    .font(.system(size: 14, weight: .semibold))
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .foregroundStyle(AppTheme.sourceButtonForeground(for: colorScheme))
+            .background(AppTheme.sourceButtonBackground(for: colorScheme))
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(AppTheme.sourceButtonBorder(for: colorScheme), lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+        .sheet(isPresented: $showSourceSheet) {
+            SourcesSheet(sources: sources)
+        }
+    }
+}
+
+// MARK: - Sources Sheet (full modal with PDF pages)
+
+private struct SourcesSheet: View {
+    let sources: [RetrievedChunk]
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                LazyVStack(spacing: 16) {
                     ForEach(Array(sources.enumerated()), id: \.element.id) { index, source in
                         NavigationLink {
                             if let pageNumber = source.pageStart {
@@ -203,56 +261,103 @@ private struct CollapsibleSourcesBlock: View {
                                     .padding()
                             }
                         } label: {
-                            SourceCard(source: source, index: index + 1)
+                            SourceRow(source: source, index: index + 1)
                         }
                         .buttonStyle(.plain)
                         .disabled(source.pageStart == nil)
                         .opacity(source.pageStart == nil ? 0.7 : 1.0)
-                        .frame(width: 220)
                     }
                 }
+                .padding()
             }
-            .padding(.top, 6)
-        } label: {
-            HStack(spacing: 6) {
-                Image(systemName: "doc.text.magnifyingglass")
-                    .font(.system(size: 12, weight: .semibold))
-                Text("Show Sources (\(sources.count))")
-                    .font(.system(size: 13, weight: .semibold))
+            .background(AppTheme.background(for: colorScheme))
+            .navigationTitle("Sources")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") { dismiss() }
+                }
             }
-            .foregroundStyle(.secondary)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 9)
-        .background(AppTheme.metaBlockBackground(for: colorScheme))
-        .clipShape(RoundedRectangle(cornerRadius: 10))
     }
 }
 
-private struct MarkdownMessageView: View {
-    let text: String
+// MARK: - Source Row (in the sources sheet)
+
+private struct SourceRow: View {
+    let source: RetrievedChunk
+    let index: Int
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        let normalized = MarkdownNormalizer.normalize(text)
-        if let attributed = try? AttributedString(
-            markdown: normalized,
-            options: AttributedString.MarkdownParsingOptions(
-                interpretedSyntax: .full,
-                failurePolicy: .returnPartiallyParsedIfPossible
-            )
-        ) {
-            Text(attributed)
-                .font(.system(size: 15))
-                .lineSpacing(4)
-                .textSelection(.enabled)
-        } else {
-            Text(normalized)
-                .font(.system(size: 15))
-                .lineSpacing(4)
-                .textSelection(.enabled)
+        HStack(spacing: 14) {
+            // PDF thumbnail
+            if let pageNumber = source.pageStart {
+                PDFThumbnailView(pageNumber: pageNumber)
+                    .frame(width: 70, height: 90)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .shadow(color: .black.opacity(0.1), radius: 2, y: 1)
+            } else {
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(AppTheme.metaBlockBackground(for: colorScheme))
+                    .frame(width: 70, height: 90)
+                    .overlay {
+                        Image(systemName: "doc.text")
+                            .foregroundStyle(.secondary)
+                    }
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text("Source \(index)")
+                        .font(.system(size: 13, weight: .bold))
+
+                    Spacer()
+
+                    if let pageStart = source.pageStart {
+                        if let pageEnd = source.pageEnd, pageEnd != pageStart {
+                            Text("pp. \(pageStart)–\(pageEnd)")
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundStyle(.secondary)
+                        } else {
+                            Text("p. \(pageStart)")
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+
+                if let heading = source.headingContext, !heading.isEmpty {
+                    Text(heading)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(2)
+                }
+
+                Text(source.textContent)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(3)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            if source.pageStart != nil {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.tertiary)
+            }
         }
+        .padding(12)
+        .background(AppTheme.sourceCardBackground(for: colorScheme))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(AppTheme.sourceButtonBorder(for: colorScheme), lineWidth: 0.5)
+        )
     }
 }
+
+// MARK: - Collapsible Meta Block (thinking/calculating)
 
 private struct CollapsibleMetaBlock: View {
     let title: String
@@ -279,6 +384,8 @@ private struct CollapsibleMetaBlock: View {
         .clipShape(RoundedRectangle(cornerRadius: 10))
     }
 }
+
+// MARK: - Mode Toggles
 
 private struct ModeTogglesRow: View {
     @Binding var isToolsModeActive: Bool
@@ -336,51 +443,7 @@ private struct ToggleChip: View {
     }
 }
 
-private struct SourceCard: View {
-    let source: RetrievedChunk
-    let index: Int
-    @Environment(\.colorScheme) private var colorScheme
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Source \(index)")
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(.secondary)
-
-            if let pageNumber = source.pageStart {
-                PDFThumbnailView(pageNumber: pageNumber)
-                    .frame(height: 90)
-                    .clipped()
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
-            }
-
-            if let heading = source.headingContext, !heading.isEmpty {
-                Text(heading)
-                    .font(.caption.weight(.semibold))
-                    .lineLimit(2)
-            }
-
-            if let pageStart = source.pageStart {
-                if let pageEnd = source.pageEnd, pageEnd != pageStart {
-                    Text("Pages \(pageStart)-\(pageEnd)")
-                        .font(.caption2.weight(.medium))
-                        .foregroundStyle(.secondary)
-                } else {
-                    Text("Page \(pageStart)")
-                        .font(.caption2.weight(.medium))
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            Text(source.textContent)
-                .font(.caption2)
-                .lineLimit(4)
-        }
-        .padding(8)
-        .background(AppTheme.sourceCardBackground(for: colorScheme))
-        .clipShape(RoundedRectangle(cornerRadius: 10))
-    }
-}
+// MARK: - Theme
 
 private enum AppTheme {
     static func background(for scheme: ColorScheme) -> Color {
@@ -429,6 +492,18 @@ private enum AppTheme {
 
     static func sendButtonForeground(for scheme: ColorScheme) -> Color {
         scheme == .dark ? Color.white : Color.black
+    }
+
+    static func sourceButtonBackground(for scheme: ColorScheme) -> Color {
+        scheme == .dark ? Color.blue.opacity(0.12) : Color.blue.opacity(0.06)
+    }
+
+    static func sourceButtonForeground(for scheme: ColorScheme) -> Color {
+        scheme == .dark ? Color.blue.opacity(0.9) : Color.blue.opacity(0.85)
+    }
+
+    static func sourceButtonBorder(for scheme: ColorScheme) -> Color {
+        scheme == .dark ? Color.blue.opacity(0.2) : Color.blue.opacity(0.15)
     }
 }
 
