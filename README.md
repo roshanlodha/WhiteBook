@@ -75,6 +75,34 @@ If the machine is fully offline, pre-populate the Hugging Face cache before star
 - `POST /api/retrieve` - Retrieve relevant chunks.
 - `POST /api/chat` - SSE streaming chat endpoint.
 
+## iOS app (native SwiftUI)
+
+The repository now includes an iOS SwiftUI app at `WhiteBook/` that keeps retrieval local and only calls Groq for final generation.
+
+### What runs where
+
+- **Local on device**: SQLite lookup from bundled `staffbook_kb.sqlite` plus source-image resolution from bundled `images/`.
+- **Remote**: Groq `chat/completions` API call.
+
+### Setup (Xcode)
+
+1. Open `WhiteBook/WhiteBook.xcodeproj`.
+2. In target **WhiteBook** -> **Build Settings**, set:
+   - `GROQ_API_KEY` = your Groq API key
+   - optional `GROQ_MODEL` (defaults to `qwen/qwen3-32b`)
+3. Add local retrieval assets into `WhiteBook/WhiteBook/`:
+   - `staffbook_kb.sqlite`
+   - `images/` folder (all referenced source images)
+4. In Xcode navigator, drag both into the **WhiteBook** target folder and check:
+   - **Copy items if needed**
+   - **Add to targets: WhiteBook**
+5. Build for any iOS simulator/device.
+
+The app expects the following bundled paths:
+
+- `staffbook_kb.sqlite` at bundle root
+- images inside bundle subfolder `images/` (loaded by filename from `chunks.image_filename`)
+
 ## Tests
 
 ```bash
